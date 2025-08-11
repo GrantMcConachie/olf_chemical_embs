@@ -1,0 +1,28 @@
+model:
+    smi_model_card: "DeepChem/ChemBERTa-77M-MTR"
+    prot_model_card: "facebook/esm2_t33_650M_UR50D"
+    combine:
+        mlp_hidden_dim: 512
+        full_smiles_sequence: True
+        smiles_hidden_dim: 256
+        num_heads: 8
+        comb_dropout: 0.1
+
+    lora_module:
+        inference_mode: False
+        r: 8
+        lora_alpha: 8
+        bias: "none"
+        use_rslora: True
+        modules_to_save: ['pooler.dense.bias', 'pooler.dense.weight']
+        target_modules: ["query", "key", "value"]
+        lora_dropout: 0.1
+
+training:
+    batch_size: 12
+    lr: 0.00001
+    train_epochs: 50
+    data_path: "data/CC/rand_splits"
+    results_path: "results/CC"
+    log_path: "logs/CC"
+
