@@ -17,12 +17,12 @@ class ProteinSmilesDataset(Dataset):
             prot_model,
             smi_model_card,
             prot_model_card,
-            num_special_tokens=2  # excluding cls and end tokens
+            num_special_tokens=2  # excluding cls and end tokens NOTE: check on this for switching out models
     ):
         # data
         self.df = pd.read_csv(dir)
 
-        # length of tokens
+        # length of tokens 
         self.smi_max_len = smi_model.config.max_position_embeddings-num_special_tokens
         self.prot_max_len = prot_model.config.max_position_embeddings-num_special_tokens
 
@@ -59,6 +59,27 @@ class ProteinSmilesDataset(Dataset):
         return (
             smi_token,
             prot_token,
-            torch.tensor(output, dtype=torch.float32),
-            self.df['SMILES'][index]
+            torch.tensor(output, dtype=torch.float32)
         )
+
+    def get_unique_smiles_rep(self):
+        # init
+        smiles = []
+        smi_tokens = []
+
+        # get unique smiles
+        unique_smiles = self.df['SMILES'].unique()
+
+        # generate tokens
+        for smi in unique_smiles:
+            smi_token = self.smi_tokenizer(
+                smi,
+                padding='max_length',  # may need to specify this for particular models
+                max_length=self.smi_max_len,
+                truncation=True,
+                return_tensors='pt'
+            )
+            smiles.append(smi)
+            smi_tokens.append(smi_token)
+
+        return smiles, smi_tokens
