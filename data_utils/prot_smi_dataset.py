@@ -56,12 +56,9 @@ class ProteinSmilesDataset(Dataset):
         prot_token['input_ids'] = prot_token['input_ids'].squeeze()
         prot_token['attention_mask'] = prot_token['attention_mask'].squeeze()
 
-        return smi_token, prot_token, torch.tensor(output, dtype=torch.float32)
-    
-    # (
-    #         smi_token['input_ids'],
-    #         smi_token['attention_mask'],
-    #         prot_token['input_ids'],
-    #         prot_token['attention_mask'],
-    #         output
-    #     )
+        return (
+            smi_token,
+            prot_token,
+            torch.tensor(output, dtype=torch.float32),
+            self.df['SMILES'][index]
+        )
