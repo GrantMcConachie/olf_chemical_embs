@@ -28,10 +28,39 @@ class ProteinSmilesLoraModel(nn.Module):
         print('protien foundation model:')
         self.prot_lora_model.print_trainable_parameters()
 
+        # linear projection of molecule embeddings into the same space to be
+        # compared with each other
+        self.lin_proj = nn.Linear(
+            self.smi_lora_model.config.hidden_size,
+            model_config['combine']['smiles_hidden_dim']
+        )
+
+        # multiheaded cross attention blocks
+        self.smi_MHA = nn.MultiheadAttention(
+            model_config['combine']['smiles_hidden_dim'],
+            model_config['combine']['num_heads'],
+            dropout=model_config['combine']['comb_dropout'],
+            kdim=self.prot_lora_model.config.hidden_size,
+            vdim=self.prot_lora_model.config.hidden_size,
+            batch_first=True
+        )
+        self.prot_MHA = nn.MultiheadAttention(
+            self.prot_lora_model.config.hidden_size,
+            model_config['combine']['num_heads'],
+            dropout=model_config['combine']['comb_dropout'],
+            kdim=model_config['combine']['smiles_hidden_dim'],
+            vdim=model_config['combine']['smiles_hidden_dim'],
+            batch_first=True
+        )
+
+        # layer norms
+        self.smi_layer_norm = nn.LayerNorm(model_config['combine']['smiles_hidden_dim'])
+        self.prot_layer_norm = nn.LayerNorm(self.prot_lora_model.config.hidden_size)
+
         # create combination MLP
         self.mlp = nn.Sequential(
             nn.Linear(
-                self.smi_lora_model.config.hidden_size + self.prot_lora_model.config.hidden_size,
+                model_config['combine']['smiles_hidden_dim'] + self.prot_lora_model.config.hidden_size,
                 model_config['combine']['mlp_hidden_dim']
             ),
             nn.ReLU(),
@@ -41,17 +70,51 @@ class ProteinSmilesLoraModel(nn.Module):
         )
 
     def forward(self, smi_token, prot_token):
+        # unpack attention masks
+        smi_mask = smi_token['attention_mask']
+        prot_mask = prot_token['attention_mask']
+
         # pass foundation model tokens through lora models
         smi_rep = self.smi_lora_model(**smi_token)
-        prot_rep = self.prot_lora_model(**prot_token)
+        prot_rep = self.prot_lora_model(**prot_token).last_hidden_state
 
-        # concatenate representations
-        cat_rep = torch.cat((smi_rep.pooler_output, prot_rep.pooler_output), -1)
+        # projecting smiles representation to consistent dimension
+        if self.model_config['combine']['full_smiles_sequence']:
+            smi_rep_new = self.lin_proj(smi_rep.last_hidden_state)
+        else:
+            smi_rep_new = self.lin_proj(smi_rep.pooler_output.unsqueeze(-2))
+
+        # passign representations through cross attention
+        smi_attn, _ = self.smi_MHA(
+            query=smi_rep_new,
+            key=prot_rep,
+            value=prot_rep,
+            key_padding_mask=(prot_mask == 0)
+        )
+        prot_attn, _ = self.prot_MHA(
+            query=prot_rep,
+            key=smi_rep_new,
+            value=smi_rep_new,
+            key_padding_mask=(smi_mask == 0)
+        )
+
+        # residual connection + layer norm
+        smi_rep = smi_attn + smi_rep_new
+        prot_rep += prot_attn
+        smi_rep = self.smi_layer_norm(smi_rep)
+        prot_rep = self.prot_layer_norm(prot_rep)
+
+        # mean pool and predict
+        smi_mask = smi_mask.float()
+        prot_mask = prot_mask.float()
+        smi_rep = (smi_rep * smi_mask.unsqueeze(-1)).sum(dim=1) / (smi_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
+        prot_rep = (prot_rep * prot_mask.unsqueeze(-1)).sum(dim=1) / (prot_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
+        cat_rep = torch.cat((smi_rep, prot_rep), -1)
 
         # passing through combination mlp
         output = self.mlp(cat_rep)
 
-        return output
+        return output, smi_rep_new, smi_token['attention_mask']
 
     def create_lora_config(self, model_config):
 
