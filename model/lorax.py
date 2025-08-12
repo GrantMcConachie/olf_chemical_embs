@@ -75,24 +75,24 @@ class ProteinSmilesLoraModel(nn.Module):
         prot_mask = prot_token['attention_mask']
 
         # pass foundation model tokens through lora models
-        smi_rep = self.smi_lora_model(**smi_token)
-        prot_rep = self.prot_lora_model(**prot_token).last_hidden_state
+        smi_rep_lora = self.smi_lora_model(**smi_token)
+        prot_rep_lora = self.prot_lora_model(**prot_token).last_hidden_state
 
         # projecting smiles representation to consistent dimension
         if self.model_config['combine']['full_smiles_sequence']:
-            smi_rep_new = self.lin_proj(smi_rep.last_hidden_state)
+            smi_rep_new = self.lin_proj(smi_rep_lora.last_hidden_state)
         else:
-            smi_rep_new = self.lin_proj(smi_rep.pooler_output.unsqueeze(-2))
+            smi_rep_new = self.lin_proj(smi_rep_lora.pooler_output.unsqueeze(-2))
 
         # passign representations through cross attention
         smi_attn, _ = self.smi_MHA(
             query=smi_rep_new,
-            key=prot_rep,
-            value=prot_rep,
+            key=prot_rep_lora,
+            value=prot_rep_lora,
             key_padding_mask=(prot_mask == 0)
         )
         prot_attn, _ = self.prot_MHA(
-            query=prot_rep,
+            query=prot_rep_lora,
             key=smi_rep_new,
             value=smi_rep_new,
             key_padding_mask=(smi_mask == 0)
@@ -100,7 +100,7 @@ class ProteinSmilesLoraModel(nn.Module):
 
         # residual connection + layer norm
         smi_rep = smi_attn + smi_rep_new
-        prot_rep += prot_attn
+        prot_rep = prot_attn + prot_rep_lora
         smi_rep = self.smi_layer_norm(smi_rep)
         prot_rep = self.prot_layer_norm(prot_rep)
 
@@ -114,7 +114,7 @@ class ProteinSmilesLoraModel(nn.Module):
         # passing through combination mlp
         output = self.mlp(cat_rep)
 
-        return output, smi_rep_new, smi_token['attention_mask']
+        return output, smi_rep_new, smi_token['attention_mask'], cat_rep
 
     def create_lora_config(self, model_config):
 

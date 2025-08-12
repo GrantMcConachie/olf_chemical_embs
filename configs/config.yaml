@@ -19,10 +19,14 @@ model:
         lora_dropout: 0.1
 
 training:
-    batch_size: 12
-    lr: 0.00001
-    train_epochs: 50
     data_path: "data/CC/rand_splits"
     results_path: "results/CC"
     log_path: "logs/CC"
 
+train_lorax:
+    batch_size: 12
+    lr: 0.00001
+    train_epochs: 50
+
+train_GB:
+    idk: "idk"

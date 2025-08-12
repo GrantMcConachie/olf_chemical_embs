@@ -17,7 +17,7 @@ from transformers import AutoModel
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from model.model import ProteinSmilesLoraModel
+from model.lorax import ProteinSmilesLoraModel
 from data_utils.prot_smi_dataset import ProteinSmilesDataset
 
 
@@ -53,7 +53,9 @@ def save_molecular_rep(train_data, val_data, test_data, model, config, device):
         for key, value in smi_tokens.items():
             smi_token = value
             smi_token = {k: v.to(device) for k, v in smi_token.items()}
-            _, smi_rep, rep_attn_mask = model(smi_token, prot_token).squeeze()
+            out = model(smi_token, prot_token)
+            smi_rep = out[1]
+            rep_attn_mask = out[2]
 
             # append arrays
             smiles.append(key)
@@ -106,13 +108,14 @@ def evaluate(model, val_dataloader, device, loss_fn, epoch, writer):
             y = y.to(device)
 
             # pass through model
-            pred, _, _ = model(smi_token, prot_token).squeeze()
+            out = model(smi_token, prot_token)
+            pred = out[0].squeeze()
             
             # calculate loss and backpropogate
             loss = loss_fn(pred, y)
 
             # bookeeping
-            preds.append(pred.squeeze())
+            preds.append(pred)
             ground_truth.append(y)
             running_loss.append(loss.item())
         
@@ -131,6 +134,62 @@ def evaluate(model, val_dataloader, device, loss_fn, epoch, writer):
     return avg_val_loss
 
 
+def get_dataloaders(
+        config,
+        split,
+        smi_model,
+        prot_model,
+        smi_model_card,
+        prot_model_card
+):
+    """
+    generates dataloaders for training
+    """
+    train_data = ProteinSmilesDataset(
+        os.path.join(config['training']['data_path'], split, "train_df.csv"),
+        smi_model,
+        prot_model,
+        smi_model_card,
+        prot_model_card
+    )
+    val_data = ProteinSmilesDataset(
+        os.path.join(config['training']['data_path'], split, "val_df.csv"),
+        smi_model,
+        prot_model,
+        smi_model_card,
+        prot_model_card
+    )
+    test_data = ProteinSmilesDataset(
+        os.path.join(config['training']['data_path'], split, "test_df.csv"),
+        smi_model,
+        prot_model,
+        smi_model_card,
+        prot_model_card
+    )
+    train_dataloader = DataLoader(
+        train_data,
+        shuffle=True,
+        batch_size=config['train_lorax']['batch_size']
+    )
+    val_dataloader = DataLoader(
+        val_data,
+        batch_size=config['train_lorax']['batch_size']
+    )
+    test_dataloader = DataLoader(
+        test_data,
+        batch_size=config['train_lorax']['batch_size']
+    )
+    
+    return (
+        train_data,
+        val_data,
+        test_data,
+        train_dataloader,
+        val_dataloader,
+        test_dataloader
+    )
+
+
 def train(config):
     """
     Main training loop for the lora model
@@ -145,6 +204,7 @@ def train(config):
     smi_model = AutoModel.from_pretrained(smi_model_card).to(device)
     prot_model = AutoModel.from_pretrained(prot_model_card).to(device)
 
+    # loop through data splits
     for split in os.listdir(config['training']['data_path']):
         print(f'Training loop for split {split}')
 
@@ -157,35 +217,13 @@ def train(config):
         writer = SummaryWriter(log_dir=log_dir)
 
         # dataloaders
-        train_data = ProteinSmilesDataset(
-            os.path.join(config['training']['data_path'], split, "train_df.csv"),
+        train_data, val_data, test_data, train_dataloader, val_dataloader, _ = get_dataloaders(
+            config,
+            split,
             smi_model,
             prot_model,
             smi_model_card,
             prot_model_card
-        )
-        val_data = ProteinSmilesDataset(
-            os.path.join(config['training']['data_path'], split, "val_df.csv"),
-            smi_model,
-            prot_model,
-            smi_model_card,
-            prot_model_card
-        )
-        test_data = ProteinSmilesDataset(
-            os.path.join(config['training']['data_path'], split, "test_df.csv"),
-            smi_model,
-            prot_model,
-            smi_model_card,
-            prot_model_card
-        )
-        train_dataloader = DataLoader(
-            train_data,
-            shuffle=True,
-            batch_size=config['training']['batch_size']
-        )
-        val_dataloader = DataLoader(
-            val_data,
-            batch_size=config['training']['batch_size']
         )
 
         # init model
@@ -198,7 +236,7 @@ def train(config):
         # init optimizer and loss_fn
         optim = torch.optim.Adam(
             params=model.parameters(),
-            lr=config['training']['lr']
+            lr=config['train_lorax']['lr']
         )
         loss_fn = torch.nn.MSELoss()
 
@@ -219,7 +257,7 @@ def train(config):
 
         # training loop
         best_loss = 1e10
-        for epoch in range(config['training']['train_epochs']):
+        for epoch in range(config['train_lorax']['train_epochs']):
             model.train()
             running_loss = []
 
@@ -234,10 +272,10 @@ def train(config):
                 y = y.to(device)
 
                 # pass through model
-                pred, _, _ = model(
+                out = model(
                     smi_token, prot_token
                 )
-                pred = pred.squeeze()
+                pred = out[0].squeeze()
 
                 # calculate loss and backpropogate
                 loss = loss_fn(pred, y)
@@ -270,6 +308,10 @@ def train(config):
             if split == os.listdir(config['training']['data_path'])[-1]:
                 print('Saving molecular representation')
                 save_molecular_rep(train_data, val_data, test_data, model, config, device)
+    
+    # write all pending events to log and close
+    writer.flush()
+    writer.close()
 
 
 if __name__ == '__main__':
