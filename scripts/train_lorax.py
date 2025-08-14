@@ -8,7 +8,6 @@ import os
 import yaml
 import pickle as pkl
 from tqdm import tqdm
-from itertools import chain
 from sklearn.metrics import r2_score
 from lifelines.utils import concordance_index
 
@@ -21,7 +20,7 @@ from model.lorax import ProteinSmilesLoraModel
 from data_utils.prot_smi_dataset import ProteinSmilesDataset
 
 
-def save_molecular_rep(train_data, val_data, test_data, model, config, device):
+def save_molecular_rep(train_data, val_data, test_data, model, config, device, designation):
     """
     Saves molecular representations over training
     """
@@ -44,7 +43,9 @@ def save_molecular_rep(train_data, val_data, test_data, model, config, device):
             smi_tokens[smi] = rep
 
     # get a random protein token
-    _, prot_token, _ = next(iter(train_data))
+    _, prot_token, _, _, _ = next(iter(train_data))
+    prot_token['input_ids'] = prot_token['input_ids'].unsqueeze(0)
+    prot_token['attention_mask'] = prot_token['attention_mask'].unsqueeze(0)
     prot_token = {k: v.to(device) for k, v in prot_token.items()}
 
     # get model representation of all smiles
@@ -65,13 +66,14 @@ def save_molecular_rep(train_data, val_data, test_data, model, config, device):
     # save representations
     save_path = os.path.join(
         config['training']['results_path'],
-        config['smi_model_card'].split('/')[-1]
+        config['smi_model_card'].split('/')[-1],
+        'saved_representations'
     )
     os.makedirs(save_path, exist_ok=True)
 
-    pkl.dump(smiles, open(os.path.join(save_path, 'smiles.pkl'), 'wb'))
-    pkl.dump(smi_reps, open(os.path.join(save_path, 'smi_reps.pkl'), 'wb'))
-    pkl.dump(rep_attn_masks, open(os.path.join(save_path, 'rep_attn_masks.pkl'), 'wb'))
+    pkl.dump(smiles, open(os.path.join(save_path, f'smiles_{designation}.pkl'), 'wb'))
+    pkl.dump(smi_reps, open(os.path.join(save_path, f'smi_reps_{designation}.pkl'), 'wb'))
+    pkl.dump(rep_attn_masks, open(os.path.join(save_path, f'rep_attn_masks_{designation}.pkl'), 'wb'))
 
 
 def save_model(model, config, split):
@@ -80,11 +82,11 @@ def save_model(model, config, split):
     """
     save_path = os.path.join(
         config['training']['results_path'],
-        config['smi_model_card'].split('/')[-1],
+        config['model']['smi_model_card'].split('/')[-1],
         split
     )
     os.makedirs(save_path, exist_ok=True)
-    model_fp = f'{config['smi_model_card'].split('/')[-1]}_{config['prot_model_card'].split('/')[-1]}_{split}.pt'
+    model_fp = f'{config['model']['smi_model_card'].split('/')[-1]}_{config['model']['prot_model_card'].split('/')[-1]}_{split}.pt'
     torch.save(
         model.state_dict(), os.path.join(save_path, model_fp)
     )
@@ -102,7 +104,7 @@ def evaluate(model, val_dataloader, device, loss_fn, epoch, writer):
 
         for i in val_dataloader:
             # unpack data
-            smi_token, prot_token, y = i
+            smi_token, prot_token, y, _, _ = i
             smi_token = {k: v.to(device) for k, v in smi_token.items()}
             prot_token = {k: v.to(device) for k, v in prot_token.items()}
             y = y.to(device)
@@ -212,6 +214,7 @@ def train(config):
         log_dir = os.path.join(
             config['training']['log_path'],
             smi_model_card.split('/')[-1],
+            'lorax',
             split
         )
         writer = SummaryWriter(log_dir=log_dir)
@@ -258,6 +261,12 @@ def train(config):
         # training loop
         best_loss = 1e10
         for epoch in range(config['train_lorax']['train_epochs']):
+
+            # save initial representation
+            if epoch == 0 and split == os.listdir(config['training']['data_path'])[0]:
+                print('Saving initial molecular representation')
+                save_molecular_rep(train_data, val_data, test_data, model, config, device, epoch)
+
             model.train()
             running_loss = []
 
@@ -266,15 +275,13 @@ def train(config):
                 optim.zero_grad()
 
                 # unpack data
-                smi_token, prot_token, y = dat
+                smi_token, prot_token, y, _, _ = dat
                 smi_token = {k: v.to(device) for k, v in smi_token.items()}
                 prot_token = {k: v.to(device) for k, v in prot_token.items()}
                 y = y.to(device)
 
                 # pass through model
-                out = model(
-                    smi_token, prot_token
-                )
+                out = model(smi_token, prot_token)
                 pred = out[0].squeeze()
 
                 # calculate loss and backpropogate
@@ -298,16 +305,25 @@ def train(config):
             # save model when the best validation loss happens
             if avg_val_loss < best_loss:
                 save_model(model, config, split)
+                writer.add_scalar("Model/best_model", epoch, epoch)
+                
+                # save final molecular representions
+                if split == os.listdir(config['training']['data_path'])[0]:
+                    print('Saving final molecular representation')
+                    save_molecular_rep(
+                        train_data,
+                        val_data,
+                        test_data,
+                        model,
+                        config,
+                        device,
+                        "final"
+                    )
 
             # report train loss
             avg_loss = sum(running_loss) / len(running_loss)
             writer.add_scalar("Loss/train", avg_loss, epoch)
             print(f"Epoch {epoch} | Avg Loss: {avg_loss:.4f}")
-
-            # save molecular representions
-            if split == os.listdir(config['training']['data_path'])[-1]:
-                print('Saving molecular representation')
-                save_molecular_rep(train_data, val_data, test_data, model, config, device)
     
     # write all pending events to log and close
     writer.flush()
