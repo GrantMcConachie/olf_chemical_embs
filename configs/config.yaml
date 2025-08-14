@@ -29,4 +29,4 @@ train_lorax:
     train_epochs: 50
 
 train_GB:
-    idk: "idk"
+    max_evals: 500
