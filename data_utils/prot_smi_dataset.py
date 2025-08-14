@@ -17,7 +17,7 @@ class ProteinSmilesDataset(Dataset):
             prot_model,
             smi_model_card,
             prot_model_card,
-            num_special_tokens=2  # excluding cls and end tokens NOTE: check on this for switching out models
+            num_special_tokens=2  # excluding cls and end tokens NOTE: could change if HF models change
     ):
         # data
         self.df = pd.read_csv(dir)
@@ -36,7 +36,7 @@ class ProteinSmilesDataset(Dataset):
     def __getitem__(self, index):
         smi_token = self.smi_tokenizer(
             self.df['SMILES'][index],
-            padding='max_length',  # may need to specify this for particular models
+            padding='max_length',  # NOTE: may need to specify this for particular models
             max_length=self.smi_max_len,
             truncation=True,
             return_tensors='pt'
@@ -59,7 +59,9 @@ class ProteinSmilesDataset(Dataset):
         return (
             smi_token,
             prot_token,
-            torch.tensor(output, dtype=torch.float32)
+            torch.tensor(output, dtype=torch.float32),
+            self.df['SMILES'][index],  # smiles
+            self.df['Protein sequence'][index]
         )
 
     def get_unique_smiles_rep(self):
@@ -83,3 +85,25 @@ class ProteinSmilesDataset(Dataset):
             smi_tokens.append(smi_token)
 
         return smiles, smi_tokens
+    
+    def get_unique_prot_rep(self):
+        # init
+        prots = []
+        prot_tokens = []
+
+        # get unique smiles
+        unique_prots = self.df['Protein sequence'].unique()
+
+        # generate tokens
+        for prot in unique_prots:
+            prot_token = self.prot_tokenizer(
+                prot,
+                padding='max_length',  # may need to specify this for particular models
+                max_length=self.prot_max_len,
+                truncation=True,
+                return_tensors='pt'
+            )
+            prots.append(prot)
+            prot_tokens.append(prot_token)
+
+        return prots, prot_tokens
