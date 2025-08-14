@@ -28,16 +28,9 @@ class ProteinSmilesLoraModel(nn.Module):
         print('protien foundation model:')
         self.prot_lora_model.print_trainable_parameters()
 
-        # linear projection of molecule embeddings into the same space to be
-        # compared with each other
-        self.lin_proj = nn.Linear(
-            self.smi_lora_model.config.hidden_size,
-            model_config['combine']['smiles_hidden_dim']
-        )
-
         # multiheaded cross attention blocks
         self.smi_MHA = nn.MultiheadAttention(
-            model_config['combine']['smiles_hidden_dim'],
+            self.smi_lora_model.config.hidden_size,
             model_config['combine']['num_heads'],
             dropout=model_config['combine']['comb_dropout'],
             kdim=self.prot_lora_model.config.hidden_size,
@@ -48,19 +41,19 @@ class ProteinSmilesLoraModel(nn.Module):
             self.prot_lora_model.config.hidden_size,
             model_config['combine']['num_heads'],
             dropout=model_config['combine']['comb_dropout'],
-            kdim=model_config['combine']['smiles_hidden_dim'],
-            vdim=model_config['combine']['smiles_hidden_dim'],
+            kdim=self.smi_lora_model.config.hidden_size,
+            vdim=self.smi_lora_model.config.hidden_size,
             batch_first=True
         )
 
         # layer norms
-        self.smi_layer_norm = nn.LayerNorm(model_config['combine']['smiles_hidden_dim'])
+        self.smi_layer_norm = nn.LayerNorm(self.smi_lora_model.config.hidden_size)
         self.prot_layer_norm = nn.LayerNorm(self.prot_lora_model.config.hidden_size)
 
         # create combination MLP
         self.mlp = nn.Sequential(
             nn.Linear(
-                model_config['combine']['smiles_hidden_dim'] + self.prot_lora_model.config.hidden_size,
+                self.smi_lora_model.config.hidden_size + self.prot_lora_model.config.hidden_size,
                 model_config['combine']['mlp_hidden_dim']
             ),
             nn.ReLU(),
@@ -80,9 +73,9 @@ class ProteinSmilesLoraModel(nn.Module):
 
         # projecting smiles representation to consistent dimension
         if self.model_config['combine']['full_smiles_sequence']:
-            smi_rep_new = self.lin_proj(smi_rep_lora.last_hidden_state)
+            smi_rep_new = smi_rep_lora.last_hidden_state
         else:
-            smi_rep_new = self.lin_proj(smi_rep_lora.pooler_output.unsqueeze(-2))
+            smi_rep_new = smi_rep_lora.pooler_output.unsqueeze(-2)
 
         # passign representations through cross attention
         smi_attn, _ = self.smi_MHA(
