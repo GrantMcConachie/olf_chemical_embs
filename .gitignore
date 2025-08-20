@@ -6,6 +6,7 @@ scripts/train_scratch.py
 data/
 bash_output/
 batch_run.sh
+batch_run_GB.sh
 saved_models/
 logs/
 results/
