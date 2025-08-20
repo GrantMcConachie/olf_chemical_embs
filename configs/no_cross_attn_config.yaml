@@ -7,7 +7,7 @@ model:
         smiles_hidden_dim: 256
         num_heads: 8
         comb_dropout: 0.1
-        no_cross_attn: False
+        no_cross_attn: True
 
     lora_module:
         inference_mode: False
@@ -21,8 +21,8 @@ model:
 
 training:
     data_path: "data/CC/rand_splits"
-    results_path: "results/CC"
-    log_path: "logs/CC"
+    results_path: "results/CC/no_cross_attn"
+    log_path: "logs/CC/no_cross_attn"
 
 train_lorax:
     batch_size: 12

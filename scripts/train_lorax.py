@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Script to train the lora model
 
@@ -12,11 +13,12 @@ from sklearn.metrics import r2_score
 from lifelines.utils import concordance_index
 
 import torch
+import torch.multiprocessing as mp
 from transformers import AutoModel
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from model.lorax import ProteinSmilesLoraModel
+from model.lorax import LORAX
 from data_utils.prot_smi_dataset import ProteinSmilesDataset
 
 
@@ -66,7 +68,7 @@ def save_molecular_rep(train_data, val_data, test_data, model, config, device, d
     # save representations
     save_path = os.path.join(
         config['training']['results_path'],
-        config['smi_model_card'].split('/')[-1],
+        config['model']['smi_model_card'].split('/')[-1],
         'saved_representations'
     )
     os.makedirs(save_path, exist_ok=True)
@@ -192,24 +194,23 @@ def get_dataloaders(
     )
 
 
-def train(config):
+def train(gpu_id, config, split_batches, splits):
     """
     Main training loop for the lora model
     """
-    # Setup device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    # setup device and splits
+    splits_for_this_gpu = split_batches[gpu_id]
+    device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else "cpu")
+    print(f'Training loop for split {splits_for_this_gpu} on {device}')
 
-    # load models
+    # get foudation models
     smi_model_card = config['model']['smi_model_card']
     prot_model_card = config['model']['prot_model_card']
     smi_model = AutoModel.from_pretrained(smi_model_card).to(device)
     prot_model = AutoModel.from_pretrained(prot_model_card).to(device)
 
-    # loop through data splits
-    for split in os.listdir(config['training']['data_path']):
-        print(f'Training loop for split {split}')
-
+    # loop through splits assigned to this gpu
+    for split in splits_for_this_gpu:
         # create tensorboard log
         log_dir = os.path.join(
             config['training']['log_path'],
@@ -230,10 +231,11 @@ def train(config):
         )
 
         # init model
-        model = ProteinSmilesLoraModel(
+        model = LORAX(
             model_config=config['model'],
             smi_model=smi_model,
             prot_model=prot_model,
+            no_cross_attn=config['model']['combine']['no_cross_attn']
         ).to(device)
 
         # init optimizer and loss_fn
@@ -260,17 +262,18 @@ def train(config):
 
         # training loop
         best_loss = 1e10
+        first_split = splits[0]
         for epoch in range(config['train_lorax']['train_epochs']):
 
             # save initial representation
-            if epoch == 0 and split == os.listdir(config['training']['data_path'])[0]:
+            if epoch == 0 and split == first_split:
                 print('Saving initial molecular representation')
                 save_molecular_rep(train_data, val_data, test_data, model, config, device, epoch)
 
             model.train()
             running_loss = []
 
-            for dat in tqdm(train_dataloader, desc=f'epoch {epoch} | batch'):
+            for dat in tqdm(train_dataloader, desc=f'Epoch {epoch} | batch'):
                 # zero gradients
                 optim.zero_grad()
 
@@ -308,7 +311,7 @@ def train(config):
                 writer.add_scalar("Model/best_model", epoch, epoch)
                 
                 # save final molecular representions
-                if split == os.listdir(config['training']['data_path'])[0]:
+                if split == first_split:
                     print('Saving final molecular representation')
                     save_molecular_rep(
                         train_data,
@@ -320,16 +323,62 @@ def train(config):
                         "final"
                     )
 
+                # update best loss
+                best_loss = avg_val_loss
+
             # report train loss
             avg_loss = sum(running_loss) / len(running_loss)
             writer.add_scalar("Loss/train", avg_loss, epoch)
             print(f"Epoch {epoch} | Avg Loss: {avg_loss:.4f}")
-    
-    # write all pending events to log and close
-    writer.flush()
-    writer.close()
+        
+        # write all pending events to log and close
+        writer.flush()
+        writer.close()
+
+        # cleanup
+        del model, train_data, val_data, test_data, train_dataloader, val_dataloader, _
+
+
+def main():
+    # load config
+    config = yaml.safe_load(open('configs/no_rslora_config.yaml', 'r'))
+
+    # split dir
+    splits = sorted(os.listdir(config['training']['data_path']))
+
+    # distribute across gpus
+    n_gpus = torch.cuda.device_count()
+
+    if n_gpus != 0:
+        split_batches = [[] for _ in range(n_gpus)]
+        for i, split in enumerate(splits):
+            split_batches[i % n_gpus].append(split)
+        
+        mp.spawn(
+            train,
+            args=(
+                config,
+                split_batches,
+                splits
+            ),
+            nprocs=n_gpus,
+            join=True
+        )
+
+    # cpu only
+    else:
+        split_batches = [splits]
+        train(0, config, split_batches, splits)
+
+    # save config
+    config_save_pth = os.path.join(
+        config['training']['results_path'],
+        config['model']['smi_model_card'].split('/')[-1],
+        'config.yaml'
+    )
+    with open(config_save_pth, 'w') as f:
+        yaml.dump(config, f)
 
 
 if __name__ == '__main__':
-    config = yaml.safe_load(open('configs/config.yaml', 'r'))
-    train(config)
+    main()

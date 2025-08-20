@@ -8,15 +8,17 @@ import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 
 
-class ProteinSmilesLoraModel(nn.Module):
+class LORAX(nn.Module):
     def __init__(
             self,
             model_config,
             smi_model,
             prot_model,
+            no_cross_attn=False
     ):
-        super(ProteinSmilesLoraModel, self).__init__()
+        super(LORAX, self).__init__()
         self.model_config = model_config
+        self.no_cross_attn = no_cross_attn
 
         # create loara models
         lora_config = self.create_lora_config(model_config)
@@ -25,7 +27,7 @@ class ProteinSmilesLoraModel(nn.Module):
 
         print('smiles foudation model:')
         self.smi_lora_model.print_trainable_parameters()
-        print('protien foundation model:')
+        print('protein foundation model:')
         self.prot_lora_model.print_trainable_parameters()
 
         # multiheaded cross attention blocks
@@ -77,31 +79,38 @@ class ProteinSmilesLoraModel(nn.Module):
         else:
             smi_rep_new = smi_rep_lora.pooler_output.unsqueeze(-2)
 
-        # passign representations through cross attention
-        smi_attn, _ = self.smi_MHA(
-            query=smi_rep_new,
-            key=prot_rep_lora,
-            value=prot_rep_lora,
-            key_padding_mask=(prot_mask == 0)
-        )
-        prot_attn, _ = self.prot_MHA(
-            query=prot_rep_lora,
-            key=smi_rep_new,
-            value=smi_rep_new,
-            key_padding_mask=(smi_mask == 0)
-        )
+        if self.no_cross_attn:
+            smi_rep = smi_rep_new.clone()
+            prot_rep = prot_rep_lora.clone()
 
-        # residual connection + layer norm
-        smi_rep = smi_attn + smi_rep_new
-        prot_rep = prot_attn + prot_rep_lora
-        smi_rep = self.smi_layer_norm(smi_rep)
-        prot_rep = self.prot_layer_norm(prot_rep)
+        else:
+            # passing representations through cross attention
+            smi_attn, _ = self.smi_MHA(
+                query=smi_rep_new,
+                key=prot_rep_lora,
+                value=prot_rep_lora,
+                key_padding_mask=(prot_mask == 0)
+            )
+            prot_attn, _ = self.prot_MHA(
+                query=prot_rep_lora,
+                key=smi_rep_new,
+                value=smi_rep_new,
+                key_padding_mask=(smi_mask == 0)
+            )
 
-        # mean pool and predict
+            # residual connection + layer norm
+            smi_rep = smi_attn + smi_rep_new
+            prot_rep = prot_attn + prot_rep_lora
+            smi_rep = self.smi_layer_norm(smi_rep)
+            prot_rep = self.prot_layer_norm(prot_rep)
+
+        # mean pool
         smi_mask = smi_mask.float()
         prot_mask = prot_mask.float()
         smi_rep = (smi_rep * smi_mask.unsqueeze(-1)).sum(dim=1) / (smi_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
         prot_rep = (prot_rep * prot_mask.unsqueeze(-1)).sum(dim=1) / (prot_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
+        
+        # concatenate
         cat_rep = torch.cat((smi_rep, prot_rep), -1)
 
         # passing through combination mlp
