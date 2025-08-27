@@ -8,21 +8,22 @@ model:
         num_heads: 8
         comb_dropout: 0.1
         no_cross_attn: False
+        no_prot_model_ft: True
 
     lora_module:
         inference_mode: False
         r: 8
         lora_alpha: 8
         bias: "none"
-        use_rslora: True
+        use_rslora: False
         modules_to_save: ["pooler.dense.bias", "pooler.dense.weight"]
         target_modules: ["query", "key", "value"]
         lora_dropout: 0.1
 
 training:
     data_path: "data/CC/rand_splits"
-    results_path: "results/CC"
-    log_path: "logs/CC"
+    results_path: "results/CC/no_prot_ft" # NOTE: change for different save folder
+    log_path: "logs/CC/no_prot_ft" # NOTE: change for different save folder
 
 train_lorax:
     batch_size: 12
