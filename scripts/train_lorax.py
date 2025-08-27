@@ -235,7 +235,8 @@ def train(gpu_id, config, split_batches, splits):
             model_config=config['model'],
             smi_model=smi_model,
             prot_model=prot_model,
-            no_cross_attn=config['model']['combine']['no_cross_attn']
+            no_cross_attn=config['model']['combine']['no_cross_attn'],
+            no_prot_model_ft=config['model']['combine']['no_prot_model_ft']
         ).to(device)
 
         # init optimizer and loss_fn
@@ -341,7 +342,7 @@ def train(gpu_id, config, split_batches, splits):
 
 def main():
     # load config
-    config = yaml.safe_load(open('configs/no_rslora_config.yaml', 'r'))
+    config = yaml.safe_load(open('configs/config.yaml', 'r'))
 
     # split dir
     splits = sorted(os.listdir(config['training']['data_path']))
