@@ -14,7 +14,8 @@ class LORAX(nn.Module):
             model_config,
             smi_model,
             prot_model,
-            no_cross_attn=False
+            no_cross_attn=False,
+            no_prot_model_ft=False
     ):
         super(LORAX, self).__init__()
         self.model_config = model_config
@@ -27,6 +28,12 @@ class LORAX(nn.Module):
 
         print('smiles foudation model:')
         self.smi_lora_model.print_trainable_parameters()
+
+        if no_prot_model_ft:
+            for param in self.prot_lora_model.parameters():
+                param.requires_grad = False
+            print("No protein fine-tuning")
+
         print('protein foundation model:')
         self.prot_lora_model.print_trainable_parameters()
 
