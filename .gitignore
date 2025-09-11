@@ -10,6 +10,7 @@ batch_run_GB.sh
 saved_models/
 logs/
 results/
+test_scripts/
 
 ##### Boilerplate #####
 
