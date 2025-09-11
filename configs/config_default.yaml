@@ -8,7 +8,7 @@ model:
         num_heads: 8
         comb_dropout: 0.1
         no_cross_attn: False
-        no_prot_model_ft: True
+        no_prot_model_ft: False
         lin_proj: False
 
     lora_module:
@@ -22,9 +22,9 @@ model:
         lora_dropout: 0.1
 
 training:
-    data_path: "data/CC/cdhit_splits"
-    results_path: "results/CC/no_prot_model_ft" # NOTE: change for different save folder
-    log_path: "logs/CC/no_prot_model_ft" # NOTE: change for different save folder
+    data_path: "data/CC/scaf_splits"
+    results_path: "results/CC/scaf_splits" # NOTE: change for different save folder
+    log_path: "logs/CC/scaf_splits" # NOTE: change for different save folder
 
 train_lorax:
     batch_size: 12

@@ -1,5 +1,5 @@
 model:
-    smi_model_card: "DeepChem/ChemBERTa-77M-MTR"
+    smi_model_card: "DeepChem/ChemBERTa-77M-MTR" # NOTE
     prot_model_card: "facebook/esm2_t33_650M_UR50D"
     combine:
         mlp_hidden_dim: 512
@@ -8,7 +8,7 @@ model:
         num_heads: 8
         comb_dropout: 0.1
         no_cross_attn: False
-        no_prot_model_ft: True
+        no_prot_model_ft: False
         lin_proj: False
 
     lora_module:
@@ -22,15 +22,15 @@ model:
         lora_dropout: 0.1
 
 training:
-    data_path: "data/CC/cdhit_splits"
-    results_path: "results/CC/no_prot_model_ft" # NOTE: change for different save folder
-    log_path: "logs/CC/no_prot_model_ft" # NOTE: change for different save folder
+    data_path: "data/M2OR/rand_splits"
+    results_path: "results/M2OR/" # NOTE: change for different save folder
+    log_path: "logs/M2OR/" # NOTE: change for different save folder
 
 train_lorax:
-    batch_size: 12
+    batch_size: 21 # NOTE
     lr: 0.00001
-    train_epochs: 50
+    train_epochs: 15 # NOTE
 
 train_GB:
     max_evals: 500
-    use_lorax_embs: True
+    use_lorax_embs: True # NOTE

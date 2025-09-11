@@ -1,34 +1,37 @@
 model:
-    smi_model_card: "DeepChem/ChemBERTa-77M-MTR"
-    prot_model_card: "facebook/esm2_t33_650M_UR50D"
-    combine:
-        mlp_hidden_dim: 512
-        full_smiles_sequence: True
-        smiles_hidden_dim: 256
-        num_heads: 8
-        comb_dropout: 0.1
-        no_cross_attn: False
-        no_prot_model_ft: False
-
-    lora_module:
-        inference_mode: False
-        r: 8
-        lora_alpha: 8
-        bias: "none"
-        use_rslora: False
-        modules_to_save: ["pooler.dense.bias", "pooler.dense.weight"]
-        target_modules: ["query", "key", "value"]
-        lora_dropout: 0.1
-
-training:
-    data_path: "data/CC/cdhit_splits"
-    results_path: "results/CC/cdhit" # NOTE: change for different save folder
-    log_path: "logs/CC/cdhit" # NOTE: change for different save folder
-
-train_lorax:
-    batch_size: 12
-    lr: 0.00001
-    train_epochs: 50
-
+  combine:
+    comb_dropout: 0.1
+    full_smiles_sequence: true
+    mlp_hidden_dim: 512
+    no_cross_attn: false
+    no_prot_model_ft: true
+    num_heads: 8
+    smiles_hidden_dim: 256
+    lin_proj: False
+  lora_module:
+    bias: none
+    inference_mode: false
+    lora_alpha: 8
+    lora_dropout: 0.1
+    modules_to_save:
+    - pooler.dense.bias
+    - pooler.dense.weight
+    r: 8
+    target_modules:
+    - query
+    - key
+    - value
+    use_rslora: false
+  prot_model_card: facebook/esm2_t33_650M_UR50D
+  smi_model_card: DeepChem/ChemBERTa-77M-MTR
 train_GB:
-    max_evals: 500
+  max_evals: 500
+  use_lorax_embs: false
+train_lorax:
+  batch_size: 12
+  lr: 1.0e-05
+  train_epochs: 100
+training:
+  data_path: data/CC/cdhit_splits
+  log_path: logs/CC/cdhit
+  results_path: results/CC/cdhit
