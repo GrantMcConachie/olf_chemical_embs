@@ -10,9 +10,17 @@ import yaml
 import pandas as pd
 import pickle as pkl
 from functools import partial
-from sklearn.metrics import r2_score
 from lifelines.utils import concordance_index
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import (
+    r2_score,
+    average_precision_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    matthews_corrcoef,
+    roc_auc_score,
+    mean_squared_error
+)
 
 import torch
 import torch.multiprocessing as mp
@@ -24,9 +32,10 @@ from hyperopt import fmin, hp, rand
 
 from model.lorax import LORAX
 from scripts.train_lorax import get_dataloaders
+from loss_functions.loss_functions import M2ORWeightedCrossEntropyLoss
 
 
-def hyperparam_objective(param, train_data, val_data, device):
+def hyperparam_objective(param, train_data, val_data, device, config):
     """
     objective to optimize hyperparameters for the xgboost model. 
     Adapted from prosmith
@@ -36,7 +45,13 @@ def hyperparam_objective(param, train_data, val_data, device):
     param["tree_method"] = "hist"
     param['device'] = device
     param["sampling_method"] = "gradient_based"
-    param['objective'] = 'reg:squarederror' # NOTE: this is only for non-binary tasks
+
+    # changing objective between binary and regression tasks
+    if 'data/M2OR' in config['training']['data_path']:
+        param['objective'] = 'binary:logistic'
+    else:
+        param['objective'] = 'reg:squarederror'
+
     del param["num_rounds"]
     del param["weight"]
 
@@ -52,7 +67,8 @@ def generate_model_reps(
         dataloader,
         smi_reps,
         prot_reps,
-        device
+        device,
+        config
 ):
     """
     generates lorax model representations to feed into xgboost
@@ -64,6 +80,15 @@ def generate_model_reps(
     ys = []
     smi_prot = []
 
+    # add weighting if M2OR data
+    if 'data/M2OR' in config['training']['data_path']:
+        loss = M2ORWeightedCrossEntropyLoss(
+                config['training']['data_path']
+            )
+        weights = []
+    else:
+        weights = None
+
     # loop through data
     with torch.no_grad():
         for dat in dataloader:
@@ -73,27 +98,53 @@ def generate_model_reps(
 
             out = model(smi_token, prot_token)
 
-            for i, j, k, l in zip(out[-1], smis, prots, y):
+            for i, j, k, l in zip(out[3], smis, prots, y):
                 cls_reps_dat.append(i.detach().cpu())
-                smi_reps_dat.append(smi_reps[j])
-                prot_reps_dat.append(prot_reps[k])
                 ys.append(l)
                 smi_prot.append((j, k))
+                if not config['train_GB']['use_lorax_embs']:
+                    # using smi and protein representations from the original
+                    # foundation models
+                    smi_reps_dat.append(smi_reps[j])
+                    prot_reps_dat.append(prot_reps[k])
+                
+                if 'data/M2OR' in config['training']['data_path']:
+                    # assign weights to the data if using the m2or dataset
+                    w_quality = loss.data_quality_w[(j, k)]
+                    w_class = loss.pos_class_weight if l else loss.neg_class_weight
+                    w_pair = loss.pair_imbalance_weight(j, k)
+
+                    # get total weighting append to weights
+                    w_tot = w_quality * w_class * w_pair
+                    weights.append(w_tot)
+
+            if config['train_GB']['use_lorax_embs']:
+                # using protein and smiles representations from the model
+                # itself
+                for s_rep, s_mask, p_rep, p_mask in zip(out[1], out[2], out[4], out[5]):
+                    smi_rep = (s_rep * s_mask.unsqueeze(-1)).sum(dim=0) / (s_mask.unsqueeze(-1).sum(dim=0) + 1e-8)
+                    prot_rep = (p_rep * p_mask.unsqueeze(-1)).sum(dim=0) / (p_mask.unsqueeze(-1).sum(dim=0) + 1e-8)
+                    smi_reps_dat.append(smi_rep.detach().cpu())
+                    prot_reps_dat.append(prot_rep.detach().cpu())                    
 
         # convert to xgb.DMatrix
         cls_reps_dat = torch.stack(cls_reps_dat)
         prot_reps_dat = torch.stack(prot_reps_dat).squeeze()
         smi_reps_dat = torch.stack(smi_reps_dat).squeeze()
         labels = torch.stack(ys)
+        if 'data/M2OR' in config['training']['data_path']:
+            weights = torch.tensor(weights, dtype=torch.float, device='cpu')
 
-        cls_reps = xgb.DMatrix(cls_reps_dat, label=labels)
+        cls_reps = xgb.DMatrix(cls_reps_dat, label=labels, weight=weights)
         prot_smi_reps = xgb.DMatrix(
             torch.concat((prot_reps_dat, smi_reps_dat), axis=-1),
-            label=labels
+            label=labels,
+            weight=weights
         )
         prot_smi_cls_reps = xgb.DMatrix(
             torch.concat((prot_reps_dat, smi_reps_dat, cls_reps_dat), axis=-1),
-            label=labels
+            label=labels,
+            weight=weights
         )
 
     return cls_reps, prot_smi_reps, prot_smi_cls_reps, smi_prot
@@ -143,17 +194,23 @@ def get_xgboost_preds(param, train_dat, test_dat, config, split, device, save, t
     """
     param["tree_method"] = "hist"
     param['device'] = device
+    if 'data/M2OR' in config['training']['data_path']:
+        param['objective'] = 'binary:logistic'
+    else:
+        param['objective'] = 'reg:squarederror'
 
     # generate predictions
     bst = xgb.train(param, train_dat, int(param['num_rounds']))
 
     # save model
     if save:
+        xg_tree = "all_lorax_tree" if config['train_GB']['use_lorax_embs'] else "tree"
         save_path = os.path.join(
             config['training']['results_path'],
             config['model']['smi_model_card'].split('/')[-1],
             split,
-            'xgboost'
+            'xgboost',
+            xg_tree
         )
         os.makedirs(save_path, exist_ok=True)
         model_fp = f'{config['model']['smi_model_card'].split('/')[-1]}_{config['model']['prot_model_card'].split('/')[-1]}_{split}_{tree}_GB.pkl'
@@ -176,16 +233,21 @@ def find_best_proportion(
     Adapted from prosmith. Finds the best proportion of
     models to use in the final prediction.
     """
-    best_mse = 1000
+    best_loss = -1000
     best_i, best_j, best_k = 0,0,0
     for i in [k/100 for k in range(0,100)]:
         for j in [k/100 for k in range(0,100)]:
             if i+j <=1:
                 k = (1-i-j)
                 y_val_pred = i * val_preds_cls + j * val_preds_prot_smi  + k * val_preds_prot_smi_cls
-                mse = mean_squared_error(val_labels, y_val_pred)
-                if mse < best_mse:
-                    best_mse = mse
+
+                if 'data/M2OR' in config['training']['data_path']:
+                    loss = matthews_corrcoef(val_labels, (y_val_pred >= 0.5).astype(int))
+                else:
+                    loss = -mean_squared_error(val_labels, y_val_pred)
+
+                if loss > best_loss:
+                    best_loss = loss
                     best_i, best_j, best_k = i, j, k
 
     # report best proportion
@@ -256,12 +318,22 @@ def train(gpu_id, config, split_batches):
         print(f'Training loop for split {split}')
 
         # create tensorboard log
-        log_dir = os.path.join(
-            config['training']['log_path'],
-            smi_model_card.split('/')[-1],
-            'tree',
-            split
-        )
+        if config['train_GB']['use_lorax_embs']:
+            log_dir = os.path.join(
+                config['training']['log_path'],
+                smi_model_card.split('/')[-1],
+                'all_lorax_tree',
+                split
+            )
+
+        else:
+            log_dir = os.path.join(
+                config['training']['log_path'],
+                smi_model_card.split('/')[-1],
+                'tree',
+                split
+            )
+
         os.makedirs(log_dir, exist_ok=True)
         writer = SummaryWriter(log_dir=log_dir)
 
@@ -278,21 +350,26 @@ def train(gpu_id, config, split_batches):
         # get all LMM and LPM represnetations from first batch
         if i == 0:
             print('generating foundation model representations')
-            smi_reps, prot_reps = generate_foundation_reps(
-                smi_model,
-                prot_model,
-                train_data,
-                val_data,
-                test_data,
-                device
-            )
+            if config['train_GB']['use_lorax_embs']:
+                smi_reps, prot_reps = None, None
+            else:
+                smi_reps, prot_reps = generate_foundation_reps(
+                    smi_model,
+                    prot_model,
+                    train_data,
+                    val_data,
+                    test_data,
+                    device
+                )
 
         # load in trained model
         model = LORAX(
             model_config=config['model'],
             smi_model=smi_model,
             prot_model=prot_model,
-            no_cross_attn=config['model']['combine']['no_cross_attn']
+            no_cross_attn=config['model']['combine']['no_cross_attn'],
+            no_prot_model_ft=config['model']['combine']['no_prot_model_ft'],
+            lin_proj=config['model']['combine']['lin_proj']
         ).to(device)
         save_path = os.path.join(
             config['training']['results_path'],
@@ -311,28 +388,32 @@ def train(gpu_id, config, split_batches):
             train_dataloader,
             smi_reps,
             prot_reps,
-            device
+            device,
+            config
         )
         val_cls, val_prot_smi, val_prot_smi_cls, _ = generate_model_reps(
             model,
             val_dataloader,
             smi_reps,
             prot_reps,
-            device
+            device,
+            config
         )
         test_cls, test_prot_smi, test_prot_smi_cls, test_smi_prots = generate_model_reps(
             model,
             test_dataloader,
             smi_reps,
             prot_reps,
-            device
+            device,
+            config
         )
         train_val_cls, train_val_prot_smi, train_val_prot_smi_cls, _ = generate_model_reps(
             model,
             list(train_dataloader) + list(val_dataloader),
             smi_reps,
             prot_reps,
-            device
+            device,
+            config
         )
 
         # optimize xgboost hyperparams
@@ -348,7 +429,7 @@ def train(gpu_id, config, split_batches):
         }
         print('optimizing xgboost [cls] hyperparams')
         best_cls = fmin(
-            fn=partial(hyperparam_objective, train_data=train_cls, val_data=val_cls, device=device),
+            fn=partial(hyperparam_objective, train_data=train_cls, val_data=val_cls, device=device, config=config),
             space=space_search,
             algo=rand.suggest,
             max_evals=config['train_GB']['max_evals'],
@@ -356,7 +437,7 @@ def train(gpu_id, config, split_batches):
 
         print('optimizing xgboost [prot_emb + smi_emb] hyperparams')
         best_prot_smi = fmin(
-            fn=partial(hyperparam_objective, train_data=train_prot_smi, val_data=val_prot_smi, device=device),
+            fn=partial(hyperparam_objective, train_data=train_prot_smi, val_data=val_prot_smi, device=device, config=config),
             space=space_search,
             algo=rand.suggest,
             max_evals=config['train_GB']['max_evals'],
@@ -364,7 +445,7 @@ def train(gpu_id, config, split_batches):
 
         print('optimizing xgboost [prot_emb + smi_emb + cls] hyperparams')
         best_prot_smi_cls = fmin(
-            fn=partial(hyperparam_objective, train_data=train_prot_smi_cls, val_data=val_prot_smi_cls, device=device),
+            fn=partial(hyperparam_objective, train_data=train_prot_smi_cls, val_data=val_prot_smi_cls, device=device, config=config),
             space=space_search,
             algo=rand.suggest,
             max_evals=config['train_GB']['max_evals'],
@@ -400,13 +481,35 @@ def train(gpu_id, config, split_batches):
         # getting results
         preds = best_i * test_preds_cls + best_j * test_preds_prot_smi + best_k * test_preds_prot_smi_cls
         ground_truth = test_cls.get_label()
-        r2 = r2_score(ground_truth, preds)
-        CI = concordance_index(ground_truth, preds)
-        mse = mean_squared_error(ground_truth, preds)
-        print(f'{split} | Test MSE: {mse:.4f} | Test R2: {r2:.4f} | Test CI: {CI:.4f}')
-        writer.add_scalar("Metrics/test_R2", r2, 0)
-        writer.add_scalar("Metrics/test_CI", CI, 0)
-        writer.add_scalar("Metrics/test_mse", mse, 0)
+        
+        if 'data/M2OR' in config['training']['data_path']:
+            # metrics for M2OR
+            bin_preds = (preds >= 0.5).astype(int)
+            ave_p = average_precision_score(ground_truth, preds)
+            precision = precision_score(ground_truth, bin_preds)
+            recall = recall_score(ground_truth, bin_preds)
+            f_score = f1_score(ground_truth, bin_preds)
+            mcc = matthews_corrcoef(ground_truth, bin_preds)
+            auroc = roc_auc_score(ground_truth, bin_preds)
+            print(f'Epoch {split} | AveP: {ave_p:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f} | F1 score: {f_score:.4f} | MCC: {mcc:.4f} | AUROC: {auroc:.4f}')
+
+            # write to tensorboard
+            writer.add_scalar(f'GB_metrics/AveP', ave_p, 0)
+            writer.add_scalar(f'GB_metrics/Precision', precision, 0)
+            writer.add_scalar(f'GB_metrics/Recall', recall, 0)
+            writer.add_scalar(f'GB_metrics/F1', f_score, 0)
+            writer.add_scalar(f'GB_metrics/MCC', mcc, 0)
+            writer.add_scalar(f'GB_metrics/AUROC', auroc, 0)
+
+        else:
+            # Metrics for everything else
+            r2 = r2_score(ground_truth, preds)
+            CI = concordance_index(ground_truth, preds)
+            mse = mean_squared_error(ground_truth, preds)
+            print(f'{split} | Test MSE: {mse:.4f} | Test R2: {r2:.4f} | Test CI: {CI:.4f}')
+            writer.add_scalar("GB_metrics/test_R2", r2, 0)
+            writer.add_scalar("GB_metrics/test_CI", CI, 0)
+            writer.add_scalar("GB_metrics/test_mse", mse, 0)
 
         # save predictions
         save_predictions(config, split, preds, test_smi_prots)
@@ -414,7 +517,7 @@ def train(gpu_id, config, split_batches):
 
 def main():
     # load config from pretrained model
-    config = yaml.safe_load(open('configs/config.yaml', 'r'))
+    config = yaml.safe_load(open('configs/config_default.yaml', 'r'))
 
     # split dir
     splits = sorted(os.listdir(config['training']['data_path']))

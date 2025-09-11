@@ -9,7 +9,15 @@ import os
 import yaml
 import pickle as pkl
 from tqdm import tqdm
-from sklearn.metrics import r2_score
+from sklearn.metrics import (
+    r2_score,
+    average_precision_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    matthews_corrcoef,
+    roc_auc_score
+)
 from lifelines.utils import concordance_index
 
 import torch
@@ -20,6 +28,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from model.lorax import LORAX
 from data_utils.prot_smi_dataset import ProteinSmilesDataset
+from loss_functions.loss_functions import M2ORWeightedCrossEntropyLoss
 
 
 def save_molecular_rep(train_data, val_data, test_data, model, config, device, designation):
@@ -62,8 +71,8 @@ def save_molecular_rep(train_data, val_data, test_data, model, config, device, d
 
             # append arrays
             smiles.append(key)
-            smi_reps.append(smi_rep)
-            rep_attn_masks.append(rep_attn_mask)
+            smi_reps.append(smi_rep.cpu().numpy())
+            rep_attn_masks.append(rep_attn_mask.cpu().numpy())
 
     # save representations
     save_path = os.path.join(
@@ -94,7 +103,7 @@ def save_model(model, config, split):
     )
 
 
-def evaluate(model, val_dataloader, device, loss_fn, epoch, writer):
+def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset):
     """
     Evaluate model against the validation set
     """
@@ -104,9 +113,9 @@ def evaluate(model, val_dataloader, device, loss_fn, epoch, writer):
         preds = []
         ground_truth = []
 
-        for i in val_dataloader:
+        for i in dataloader:
             # unpack data
-            smi_token, prot_token, y, _, _ = i
+            smi_token, prot_token, y, smiles, prot = i
             smi_token = {k: v.to(device) for k, v in smi_token.items()}
             prot_token = {k: v.to(device) for k, v in prot_token.items()}
             y = y.to(device)
@@ -115,27 +124,55 @@ def evaluate(model, val_dataloader, device, loss_fn, epoch, writer):
             out = model(smi_token, prot_token)
             pred = out[0].squeeze()
             
-            # calculate loss and backpropogate
-            loss = loss_fn(pred, y)
+            # calculate loss
+            if 'data/M2OR' in config['training']['data_path']:
+                loss = loss_fn(pred, y, smiles, prot)
+            else:
+                loss = loss_fn(pred, y)
 
             # bookeeping
             preds.append(pred)
             ground_truth.append(y)
             running_loss.append(loss.item())
         
+        # metrics
+        avg_loss = sum(running_loss) / len(running_loss)
         ground_truth = torch.concat(ground_truth).cpu().numpy()
-        preds = torch.concat(preds).cpu().numpy()
-        val_r2 = r2_score(ground_truth, preds)
-        avg_val_loss = sum(running_loss) / len(running_loss)
-        val_CI = concordance_index(ground_truth, preds)
-        print(f'Epoch {epoch} | Avg Val Loss: {avg_val_loss:.4f} | Val R2: {val_r2:.4f} | Val CI: {val_CI:.4f}')
 
-        # write to tensorboard
-        writer.add_scalar("Loss/val", avg_val_loss, epoch)
-        writer.add_scalar('Metrics/val_R2', val_r2, epoch)
-        writer.add_scalar('Metrics/val_CI', val_CI, epoch)
+        # change metrics if binary data
+        if 'data/M2OR' in config['training']['data_path']:
+            logits = torch.concat(preds)
+            preds = torch.nn.Sigmoid()((logits)).cpu().numpy()
+            bin_preds = (preds >= 0.5).astype(int)
+            ave_p = average_precision_score(ground_truth, preds)
+            precision = precision_score(ground_truth, bin_preds)
+            recall = recall_score(ground_truth, bin_preds)
+            f_score = f1_score(ground_truth, bin_preds)
+            mcc = matthews_corrcoef(ground_truth, bin_preds)
+            auroc = roc_auc_score(ground_truth, bin_preds)
+            print(f'Epoch {epoch} | Avg {dataset} Loss: {avg_loss:.4f} | {dataset} AveP: {ave_p:.4f} | {dataset} Precision: {precision:.4f} | {dataset} Recall: {recall:.4f} | {dataset} F1 score: {f_score:.4f} | {dataset} MCC: {mcc:.4f} | {dataset} AUROC: {auroc:.4f}')
 
-    return avg_val_loss
+            # write to tensorboard
+            writer.add_scalar(f'Loss/{dataset}', avg_loss, epoch)
+            writer.add_scalar(f'{dataset}_metrics/AveP', ave_p, epoch)
+            writer.add_scalar(f'{dataset}_metrics/Precision', precision, epoch)
+            writer.add_scalar(f'{dataset}_metrics/Recall', recall, epoch)
+            writer.add_scalar(f'{dataset}_metrics/F1', f_score, epoch)
+            writer.add_scalar(f'{dataset}_metrics/MCC', mcc, epoch)
+            writer.add_scalar(f'{dataset}_metrics/AUROC', auroc, epoch)
+
+        else:
+            preds = torch.concat(preds).cpu().numpy()
+            r2 = r2_score(ground_truth, preds)
+            ci = concordance_index(ground_truth, preds)
+            print(f'Epoch {epoch} | Avg {dataset} Loss: {avg_loss:.4f} | {dataset} R2: {r2:.4f} | {dataset} CI: {ci:.4f}')
+
+            # write to tensorboard
+            writer.add_scalar(f'Loss/{dataset}', avg_loss, epoch)
+            writer.add_scalar(f'{dataset}_metrics/{dataset}/R2', r2, epoch)
+            writer.add_scalar(f'{dataset}_metrics/{dataset}/CI', ci, epoch)
+
+    return avg_loss
 
 
 def get_dataloaders(
@@ -196,7 +233,7 @@ def get_dataloaders(
 
 def train(gpu_id, config, split_batches, splits):
     """
-    Main training loop for the lora model
+    Main training loop for LORAX
     """
     # setup device and splits
     splits_for_this_gpu = split_batches[gpu_id]
@@ -211,6 +248,8 @@ def train(gpu_id, config, split_batches, splits):
 
     # loop through splits assigned to this gpu
     for split in splits_for_this_gpu:
+        print(f'Split: {split}')
+
         # create tensorboard log
         log_dir = os.path.join(
             config['training']['log_path'],
@@ -221,7 +260,7 @@ def train(gpu_id, config, split_batches, splits):
         writer = SummaryWriter(log_dir=log_dir)
 
         # dataloaders
-        train_data, val_data, test_data, train_dataloader, val_dataloader, _ = get_dataloaders(
+        train_data, val_data, test_data, train_dataloader, val_dataloader, test_dataloader = get_dataloaders(
             config,
             split,
             smi_model,
@@ -236,7 +275,8 @@ def train(gpu_id, config, split_batches, splits):
             smi_model=smi_model,
             prot_model=prot_model,
             no_cross_attn=config['model']['combine']['no_cross_attn'],
-            no_prot_model_ft=config['model']['combine']['no_prot_model_ft']
+            no_prot_model_ft=config['model']['combine']['no_prot_model_ft'],
+            lin_proj=config['model']['combine']['lin_proj']
         ).to(device)
 
         # init optimizer and loss_fn
@@ -244,7 +284,14 @@ def train(gpu_id, config, split_batches, splits):
             params=model.parameters(),
             lr=config['train_lorax']['lr']
         )
-        loss_fn = torch.nn.MSELoss()
+
+        # use special loss function for M2OR data
+        if 'data/M2OR' in config['training']['data_path']:
+            loss_fn = M2ORWeightedCrossEntropyLoss(
+                config['training']['data_path']
+            )
+        else:
+            loss_fn = torch.nn.MSELoss()
 
         # look at parameters
         tot_train_params = sum(
@@ -279,7 +326,7 @@ def train(gpu_id, config, split_batches, splits):
                 optim.zero_grad()
 
                 # unpack data
-                smi_token, prot_token, y, _, _ = dat
+                smi_token, prot_token, y, smiles, prot = dat
                 smi_token = {k: v.to(device) for k, v in smi_token.items()}
                 prot_token = {k: v.to(device) for k, v in prot_token.items()}
                 y = y.to(device)
@@ -288,8 +335,12 @@ def train(gpu_id, config, split_batches, splits):
                 out = model(smi_token, prot_token)
                 pred = out[0].squeeze()
 
-                # calculate loss and backpropogate
-                loss = loss_fn(pred, y)
+                # calculate loss and backprop
+                if 'data/M2OR' in config['training']['data_path']:
+                    loss = loss_fn(pred, y, smiles, prot)
+                else:
+                    loss = loss_fn(pred, y)
+
                 loss.backward()
                 optim.step()
 
@@ -298,12 +349,24 @@ def train(gpu_id, config, split_batches, splits):
 
             # evaluate
             avg_val_loss = evaluate(
+                config,
                 model,
                 val_dataloader,
                 device,
                 loss_fn,
                 epoch,
-                writer
+                writer,
+                'val'
+            )
+            _ = evaluate(
+                config,
+                model,
+                test_dataloader,
+                device,
+                loss_fn,
+                epoch,
+                writer,
+                'test'
             )
 
             # save model when the best validation loss happens
@@ -342,7 +405,7 @@ def train(gpu_id, config, split_batches, splits):
 
 def main():
     # load config
-    config = yaml.safe_load(open('configs/config.yaml', 'r'))
+    config = yaml.safe_load(open('configs/config_default.yaml', 'r'))
 
     # split dir
     splits = sorted(os.listdir(config['training']['data_path']))
@@ -355,6 +418,7 @@ def main():
         for i, split in enumerate(splits):
             split_batches[i % n_gpus].append(split)
         
+        # call main training function
         mp.spawn(
             train,
             args=(
@@ -369,6 +433,8 @@ def main():
     # cpu only
     else:
         split_batches = [splits]
+
+        # call main training function
         train(0, config, split_batches, splits)
 
     # save config
