@@ -4,6 +4,7 @@ Script to train the lora model
 
 import os
 import yaml
+import argparse
 import pickle as pkl
 from tqdm import tqdm
 from sklearn.metrics import (
@@ -401,8 +402,15 @@ def train(gpu_id, config, split_batches, splits):
 
 
 def main():
+    # parse args
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '-c', '--config', type=str, help='Path to config file', required=True
+    )
+    args = parser.parse_args()
+
     # load config
-    config = yaml.safe_load(open('configs/config.yaml', 'r'))
+    config = yaml.safe_load(open(args.config, 'r'))
 
     # split dir
     splits = sorted(os.listdir(config['training']['data_path']))

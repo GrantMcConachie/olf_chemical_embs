@@ -4,6 +4,7 @@ Trains a gradient boosted descision tree on top of lorax
 
 import os
 import yaml
+import argparse
 import pandas as pd
 import pickle as pkl
 from functools import partial
@@ -513,8 +514,15 @@ def train(gpu_id, config, split_batches):
 
 
 def main():
-    # load config from pretrained model
-    config = yaml.safe_load(open('configs/config.yaml', 'r'))
+    # parse args
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '-c', '--config', type=str, help='Path to config file', required=True
+    )
+    args = parser.parse_args()
+
+    # load config
+    config = yaml.safe_load(open(args.config, 'r'))
 
     # split dir
     splits = sorted(os.listdir(config['training']['data_path']))
