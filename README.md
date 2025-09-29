@@ -1,5 +1,2 @@
 # olf_chemical_embs
-This is a repo that takes a bunch of molecular foundation models and fine tunes them to a few olfactory related datasets to generate optimal embeddings to predict odorant-OR interactions.
-
-## LoRA-based Odorant-Receptor Affinity eXtraction (LORAX)
-## LoRA-based Odorant-Receptor Affinity prediction with CROSS-attention (LORAX)
+This is a repo for **L**oRA-based **O**dorant-**R**eceptor **A**ffinity prediction with **CROSS**-attention (**LORAX**) from [this](https://openreview.net/forum?id=BUUfUcIcfE&referrer=%5BAuthor%20Console%5D(%2Fgroup%3Fid%3DICLR.cc%2F2026%2FConference%2FAuthors%23your-submissions)) paper.
