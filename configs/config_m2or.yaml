@@ -8,7 +8,7 @@ model:
         num_heads: 8
         comb_dropout: 0.1
         no_cross_attn: False
-        no_prot_model_ft: False
+        no_prot_model_ft: True
         lin_proj: False
 
     lora_module:
@@ -23,14 +23,14 @@ model:
 
 training:
     data_path: "data/M2OR/rand_splits"
-    results_path: "results/M2OR/" # NOTE: change for different save folder
-    log_path: "logs/M2OR/" # NOTE: change for different save folder
+    results_path: "results/M2OR/no_prot_ft" # NOTE: change for different save folder
+    log_path: "logs/M2OR/no_prot_ft" # NOTE: change for different save folder
 
 train_lorax:
     batch_size: 21 # NOTE
-    lr: 0.00001
+    lr: 0.0001
     train_epochs: 15 # NOTE
 
 train_GB:
     max_evals: 500
-    use_lorax_embs: True # NOTE
+    use_lorax_embs: false # NOTE

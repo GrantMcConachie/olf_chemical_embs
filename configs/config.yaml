@@ -2,12 +2,12 @@ model:
   combine:
     comb_dropout: 0.1
     full_smiles_sequence: true
+    lin_proj: false
     mlp_hidden_dim: 512
     no_cross_attn: false
     no_prot_model_ft: true
     num_heads: 8
     smiles_hidden_dim: 256
-    lin_proj: False
   lora_module:
     bias: none
     inference_mode: false
@@ -29,9 +29,9 @@ train_GB:
   use_lorax_embs: false
 train_lorax:
   batch_size: 12
-  lr: 1.0e-05
-  train_epochs: 100
+  lr: 0.0001
+  train_epochs: 50
 training:
-  data_path: data/CC/cdhit_splits
-  log_path: logs/CC/cdhit
-  results_path: results/CC/cdhit
+  data_path: data/CC/scaf_splits
+  log_path: logs/CC/scaf_split_no_prot
+  results_path: results/CC/scaf_split_no_prot

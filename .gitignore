@@ -11,6 +11,7 @@ saved_models/
 logs/
 results/
 test_scripts/
+scripts/plot_attn_weights.py
 
 ##### Boilerplate #####
 

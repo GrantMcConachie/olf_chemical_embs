@@ -1,8 +1,5 @@
-#!/usr/bin/env python3
 """
 Trains a gradient boosted descision tree on top of lorax
-
-export HF_HOME=/projectnb/depaqlab/Grant/lora/saved_models
 """
 
 import os
@@ -517,7 +514,7 @@ def train(gpu_id, config, split_batches):
 
 def main():
     # load config from pretrained model
-    config = yaml.safe_load(open('configs/config_default.yaml', 'r'))
+    config = yaml.safe_load(open('configs/config.yaml', 'r'))
 
     # split dir
     splits = sorted(os.listdir(config['training']['data_path']))

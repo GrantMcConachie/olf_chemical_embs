@@ -1,8 +1,5 @@
-#!/usr/bin/env python3
 """
 Script to train the lora model
-
-export HF_HOME=/projectnb/depaqlab/Grant/lora/saved_models
 """
 
 import os
@@ -71,8 +68,8 @@ def save_molecular_rep(train_data, val_data, test_data, model, config, device, d
 
             # append arrays
             smiles.append(key)
-            smi_reps.append(smi_rep.cpu().numpy())
-            rep_attn_masks.append(rep_attn_mask.cpu().numpy())
+            smi_reps.append(smi_rep.cpu())
+            rep_attn_masks.append(rep_attn_mask.cpu())
 
     # save representations
     save_path = os.path.join(
@@ -405,7 +402,7 @@ def train(gpu_id, config, split_batches, splits):
 
 def main():
     # load config
-    config = yaml.safe_load(open('configs/config_default.yaml', 'r'))
+    config = yaml.safe_load(open('configs/config.yaml', 'r'))
 
     # split dir
     splits = sorted(os.listdir(config['training']['data_path']))

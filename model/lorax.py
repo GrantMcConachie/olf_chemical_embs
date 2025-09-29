@@ -1,5 +1,7 @@
 """
 Multimodel LoRA transformer model
+
+TODO: Speed up MHA layers (https://docs.pytorch.org/tutorials/intermediate/transformer_building_blocks.html)
 """
 
 import torch
@@ -9,13 +11,17 @@ from peft import LoraConfig, get_peft_model
 
 
 class LORAX(nn.Module):
+    """
+    LORAX model
+    """
     def __init__(
             self,
             model_config,
             smi_model,
             prot_model,
             no_cross_attn=False,
-            no_prot_model_ft=False
+            no_prot_model_ft=False,
+            lin_proj=False
     ):
         super(LORAX, self).__init__()
         self.model_config = model_config
@@ -59,17 +65,25 @@ class LORAX(nn.Module):
         self.smi_layer_norm = nn.LayerNorm(self.smi_lora_model.config.hidden_size)
         self.prot_layer_norm = nn.LayerNorm(self.prot_lora_model.config.hidden_size)
 
-        # create combination MLP
-        self.mlp = nn.Sequential(
-            nn.Linear(
+        if lin_proj:
+            # linear projection
+            self.proj = nn.Linear(
                 self.smi_lora_model.config.hidden_size + self.prot_lora_model.config.hidden_size,
-                model_config['combine']['mlp_hidden_dim']
-            ),
-            nn.ReLU(),
-            nn.Linear(model_config['combine']['mlp_hidden_dim'], model_config['combine']['mlp_hidden_dim']),
-            nn.ReLU(),
-            nn.Linear(model_config['combine']['mlp_hidden_dim'], 1)
-        )
+                1
+            )
+
+        else:
+            # create combination MLP
+            self.proj = nn.Sequential(
+                nn.Linear(
+                    self.smi_lora_model.config.hidden_size + self.prot_lora_model.config.hidden_size,
+                    model_config['combine']['mlp_hidden_dim']
+                ),
+                nn.ReLU(),
+                nn.Linear(model_config['combine']['mlp_hidden_dim'], model_config['combine']['mlp_hidden_dim']),
+                nn.ReLU(),
+                nn.Linear(model_config['combine']['mlp_hidden_dim'], 1)
+            )
 
     def forward(self, smi_token, prot_token):
         # unpack attention masks
@@ -121,9 +135,16 @@ class LORAX(nn.Module):
         cat_rep = torch.cat((smi_rep, prot_rep), -1)
 
         # passing through combination mlp
-        output = self.mlp(cat_rep)
+        output = self.proj(cat_rep)
 
-        return output, smi_rep_new, smi_token['attention_mask'], cat_rep
+        return (
+            output,
+            smi_rep_new,
+            smi_mask,
+            cat_rep,
+            prot_rep_lora,
+            prot_mask
+        )
 
     def create_lora_config(self, model_config):
 
@@ -139,3 +160,45 @@ class LORAX(nn.Module):
         )
 
         return lora_config
+    
+    def get_cross_attn_weights(self, smi_token, prot_token, average_attn_weights):
+        """
+        Method for getting cross attn weights for visualization.
+        """
+        smi_mask = smi_token['attention_mask']
+        prot_mask = prot_token['attention_mask']
+
+        # pass foundation model tokens through lora models
+        smi_rep_lora = self.smi_lora_model(**smi_token)
+        prot_rep_lora = self.prot_lora_model(**prot_token).last_hidden_state
+
+        # projecting smiles representation to consistent dimension
+        if self.model_config['combine']['full_smiles_sequence']:
+            smi_rep_new = smi_rep_lora.last_hidden_state
+        else:
+            smi_rep_new = smi_rep_lora.pooler_output.unsqueeze(-2)
+
+        if self.no_cross_attn:
+            raise Exception(
+                "Cannot get cross attn weights without cross attn layers. " \
+                "Set 'no_cross_attn' to 'False'."
+            )
+
+        else:
+            # passing representations through cross attention
+            smi_attn, smi_attn_weights = self.smi_MHA(
+                query=smi_rep_new,
+                key=prot_rep_lora,
+                value=prot_rep_lora,
+                key_padding_mask=(prot_mask == 0),
+                average_attn_weights=average_attn_weights
+            )
+            prot_attn, prot_attn_weights = self.prot_MHA(
+                query=prot_rep_lora,
+                key=smi_rep_new,
+                value=smi_rep_new,
+                key_padding_mask=(smi_mask == 0),
+                average_attn_weights=average_attn_weights
+            )
+        
+        return smi_attn_weights, prot_attn_weights
