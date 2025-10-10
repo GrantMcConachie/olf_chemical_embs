@@ -23,12 +23,12 @@ model:
 
 training:
     data_path: "data/CC/rand_splits"
-    results_path: "results/CC/lin_proj" # NOTE: change for different save folder
-    log_path: "logs/CC/lin_proj" # NOTE: change for different save folder
+    results_path: "results/CC" # NOTE: change for different save folder
+    log_path: "logs/CC" # NOTE: change for different save folder
 
 train_lorax:
     batch_size: 12
-    lr: 0.001  # NOTE
+    lr: 1e-5  # NOTE
     train_epochs: 50
 
 train_GB:
