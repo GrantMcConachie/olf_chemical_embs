@@ -1,5 +1,8 @@
 """
 Script to train the lora model
+
+TODO: change training to train an ensemble of LORAX models to generalize across
+proteins.
 """
 
 import os
