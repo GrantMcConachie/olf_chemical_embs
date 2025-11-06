@@ -12,6 +12,8 @@ logs/
 results/
 test_scripts/
 scripts/plot_attn_weights.py
+scripts/run_inference.py
+batch_inference.sh
 
 ##### Boilerplate #####
 
