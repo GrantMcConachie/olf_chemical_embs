@@ -28,9 +28,10 @@ class LORAX(nn.Module):
         self.no_cross_attn = no_cross_attn
 
         # create loara models
-        lora_config = self.create_lora_config(model_config)
-        self.smi_lora_model = get_peft_model(smi_model, lora_config) 
-        self.prot_lora_model = get_peft_model(prot_model, lora_config)
+        lora_config_smi = self.create_lora_config(model_config)
+        lora_config_prot = self.create_lora_config(model_config)
+        self.smi_lora_model = get_peft_model(smi_model, lora_config_smi) 
+        self.prot_lora_model = get_peft_model(prot_model, lora_config_prot)
 
         print('smiles foudation model:')
         self.smi_lora_model.print_trainable_parameters()

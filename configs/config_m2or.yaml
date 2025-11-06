@@ -23,8 +23,8 @@ model:
 
 training:
     data_path: "data/M2OR/rand_splits"
-    results_path: "results/M2OR/no_prot_ft" # NOTE: change for different save folder
-    log_path: "logs/M2OR/no_prot_ft" # NOTE: change for different save folder
+    results_path: "results/M2OR/fixed_lora" # NOTE: change for different save folder
+    log_path: "logs/M2OR/fixed_lora" # NOTE: change for different save folder
 
 train_lorax:
     batch_size: 21 # NOTE

@@ -241,8 +241,8 @@ def train(gpu_id, config, split_batches, splits):
     # get foudation models
     smi_model_card = config['model']['smi_model_card']
     prot_model_card = config['model']['prot_model_card']
-    smi_model = AutoModel.from_pretrained(smi_model_card).to(device)
-    prot_model = AutoModel.from_pretrained(prot_model_card).to(device)
+    smi_model = AutoModel.from_pretrained(smi_model_card, force_download=True).to(device)
+    prot_model = AutoModel.from_pretrained(prot_model_card, force_download=True).to(device)
 
     # loop through splits assigned to this gpu
     for split in splits_for_this_gpu:
@@ -266,6 +266,10 @@ def train(gpu_id, config, split_batches, splits):
             smi_model_card,
             prot_model_card
         )
+
+        print('reloading models to remove old adapters')
+        smi_model = AutoModel.from_pretrained(smi_model_card, force_download=True).to(device).eval()
+        prot_model = AutoModel.from_pretrained(prot_model_card, force_download=True).to(device).eval()
 
         # init model
         model = LORAX(

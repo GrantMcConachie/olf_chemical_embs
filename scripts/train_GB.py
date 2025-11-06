@@ -171,7 +171,10 @@ def generate_foundation_reps(smi_model, prot_model, train_data, val_data, test_d
         for smi, token in zip(all_smi, all_smi_tokens):
             if smi not in smi_reps:
                 token = {k: v.to(device) for k, v in token.items()}
-                rep = smi_model(**token).pooler_output  # embedding
+                smi_mask = token['attention_mask']
+                rep = smi_model(**token).pooler_output  # noisy embedding
+                # rep = smi_model(**token).last_hidden_state  # embedding
+                # rep = (rep * smi_mask.unsqueeze(-1)).sum(dim=1) / (smi_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
                 smi_reps[smi] = rep.detach().cpu()
 
         # combine prot tokens
@@ -180,7 +183,10 @@ def generate_foundation_reps(smi_model, prot_model, train_data, val_data, test_d
         for prot, token in zip(all_prot, all_prot_tokens):
             if prot not in prot_reps:
                 token = {k: v.to(device) for k, v in token.items()}
-                rep = prot_model(**token).pooler_output  # embedding
+                prot_mask = token['attention_mask']
+                rep = prot_model(**token).pooler_output # noisy embedding
+                # rep = prot_model(**token).last_hidden_state  # embedding
+                # rep = (rep * prot_mask.unsqueeze(-1)).sum(dim=1) / (prot_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
                 prot_reps[prot] = rep.detach().cpu()
 
     return smi_reps, prot_reps
@@ -308,8 +314,8 @@ def train(gpu_id, config, split_batches):
     # load models
     smi_model_card = config['model']['smi_model_card']
     prot_model_card = config['model']['prot_model_card']
-    smi_model = AutoModel.from_pretrained(smi_model_card).to(device).eval()
-    prot_model = AutoModel.from_pretrained(prot_model_card).to(device).eval()
+    smi_model = AutoModel.from_pretrained(smi_model_card, force_download=True).to(device).eval()
+    prot_model = AutoModel.from_pretrained(prot_model_card, force_download=True).to(device).eval()
 
     # loop through data splits
     for i, split in enumerate(splits_for_this_gpu):
@@ -360,6 +366,10 @@ def train(gpu_id, config, split_batches):
                     device
                 )
 
+        print('reloading models to remove old adapters')
+        smi_model = AutoModel.from_pretrained(smi_model_card, force_download=True).to(device).eval()
+        prot_model = AutoModel.from_pretrained(prot_model_card, force_download=True).to(device).eval()
+
         # load in trained model
         model = LORAX(
             model_config=config['model'],
@@ -376,6 +386,23 @@ def train(gpu_id, config, split_batches):
         )
         state_dict = f'{config['model']['smi_model_card'].split('/')[-1]}_{config['model']['prot_model_card'].split('/')[-1]}_{split}.pt'
         state_dict = torch.load(os.path.join(save_path, state_dict), map_location=device)
+
+        # update state_dict to v2 of model
+        if 'proj.0.weight' not in state_dict.keys():
+            state_dict['proj.0.weight'] = state_dict['mlp.0.weight']
+            state_dict['proj.0.bias'] = state_dict['mlp.0.bias']
+            state_dict['proj.2.weight'] = state_dict['mlp.2.weight']
+            state_dict['proj.2.bias'] = state_dict['mlp.2.bias']
+            state_dict['proj.4.weight'] = state_dict['mlp.4.weight']
+            state_dict['proj.4.bias'] = state_dict['mlp.4.bias']
+
+            del state_dict['mlp.0.weight']
+            del state_dict['mlp.0.bias']
+            del state_dict['mlp.2.weight']
+            del state_dict['mlp.2.bias']
+            del state_dict['mlp.4.weight']
+            del state_dict['mlp.4.bias']
+
         model.load_state_dict(state_dict)
         model.eval()
 
