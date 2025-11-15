@@ -85,6 +85,6 @@ def main(m2or_split_fp, m2or_raw_fp):
 
 
 if __name__ == '__main__':
-    m2or_split_fp = '/projectnb/depaqlab/Grant/lora/data/M2OR/rand_splits'
-    m2or_raw_fp = '/projectnb/depaqlab/Grant/lora/data/M2OR/raw'
+    m2or_split_fp = './data/M2OR/rand_splits'
+    m2or_raw_fp = './data/M2OR/raw'
     main(m2or_split_fp, m2or_raw_fp)

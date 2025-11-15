@@ -148,7 +148,7 @@ def generate_model_reps(
     return cls_reps, prot_smi_reps, prot_smi_cls_reps, smi_prot
 
 
-def generate_foundation_reps(smi_model, prot_model, train_data, val_data, test_data, device):
+def generate_foundation_reps(smi_model, prot_model, train_data, val_data, test_data, device, mode='train'):
     """
     generates foundation model representations to feed into xgboost
     """
@@ -172,9 +172,11 @@ def generate_foundation_reps(smi_model, prot_model, train_data, val_data, test_d
             if smi not in smi_reps:
                 token = {k: v.to(device) for k, v in token.items()}
                 smi_mask = token['attention_mask']
-                rep = smi_model(**token).pooler_output  # noisy embedding
-                # rep = smi_model(**token).last_hidden_state  # embedding
-                # rep = (rep * smi_mask.unsqueeze(-1)).sum(dim=1) / (smi_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
+                if mode == 'train':
+                    rep = smi_model(**token).pooler_output
+                if mode == 'inference':
+                    rep = smi_model(**token).last_hidden_state  # embedding
+                    rep = (rep * smi_mask.unsqueeze(-1)).sum(dim=1) / (smi_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
                 smi_reps[smi] = rep.detach().cpu()
 
         # combine prot tokens
@@ -184,9 +186,11 @@ def generate_foundation_reps(smi_model, prot_model, train_data, val_data, test_d
             if prot not in prot_reps:
                 token = {k: v.to(device) for k, v in token.items()}
                 prot_mask = token['attention_mask']
-                rep = prot_model(**token).pooler_output # noisy embedding
-                # rep = prot_model(**token).last_hidden_state  # embedding
-                # rep = (rep * prot_mask.unsqueeze(-1)).sum(dim=1) / (prot_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
+                if mode == 'train':
+                    rep = prot_model(**token).pooler_output 
+                if mode == 'inference':
+                    rep = prot_model(**token).last_hidden_state  # embedding
+                    rep = (rep * prot_mask.unsqueeze(-1)).sum(dim=1) / (prot_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
                 prot_reps[prot] = rep.detach().cpu()
 
     return smi_reps, prot_reps
@@ -363,7 +367,8 @@ def train(gpu_id, config, split_batches):
                     train_data,
                     val_data,
                     test_data,
-                    device
+                    device,
+                    'train'
                 )
 
         print('reloading models to remove old adapters')
