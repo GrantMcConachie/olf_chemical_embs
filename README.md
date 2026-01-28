@@ -8,7 +8,7 @@ This is a repo for **L**oRA-based **O**dorant-**R**eceptor **A**ffinity predicti
 To set up the environment run
 
 ```
-git clone [repo]
+git clone https://github.com/GrantMcConachie/olf_chemical_embs.git
 cd olf_chemical_embs
 pip install -r requirements.txt
 ```
