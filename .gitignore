@@ -16,6 +16,10 @@ scripts/run_inference.py
 batch_inference.sh
 scripts/brian_readme.md
 brians_sandbox.ipynb
+batch_scripts_rank_sweep/
+batch_scripts_module_sweep/
+bash_output_rank_sweep/
+bash_output_module_sweep/
 
 ##### Boilerplate #####
 
