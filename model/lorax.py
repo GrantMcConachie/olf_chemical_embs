@@ -4,8 +4,10 @@ Multimodel LoRA transformer model
 TODO: Speed up MHA layers (https://docs.pytorch.org/tutorials/intermediate/transformer_building_blocks.html)
 """
 
+import copy
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from peft import LoraConfig, get_peft_model
 
@@ -27,11 +29,16 @@ class LORAX(nn.Module):
         self.model_config = model_config
         self.no_cross_attn = no_cross_attn
 
-        # create loara models
-        lora_config_smi = self.create_lora_config(model_config)
-        lora_config_prot = self.create_lora_config(model_config)
+        # create lora models
+        lora_config_smi = self.create_lora_config(model_config, model_type='smi')
+        lora_config_prot = self.create_lora_config(model_config, model_type='prot')
         self.smi_lora_model = get_peft_model(smi_model, lora_config_smi) 
         self.prot_lora_model = get_peft_model(prot_model, lora_config_prot)
+
+        # making a hidden size attribute for unimol
+        if model_config['smi_model_card'] == 'unimol':
+            self.smi_lora_model.config = copy.deepcopy(self.prot_lora_model.config)
+            self.smi_lora_model.config.hidden_size = smi_model.args.encoder_embed_dim
 
         print('smiles foudation model:')
         self.smi_lora_model.print_trainable_parameters()
@@ -88,16 +95,29 @@ class LORAX(nn.Module):
 
     def forward(self, smi_token, prot_token):
         # unpack attention masks
-        smi_mask = smi_token['attention_mask']
+        if self.model_config['smi_model_card'] == 'unimol':
+            pad_len = 512
+            smi_mask = smi_token['atom_mask']
+            smi_mask = F.pad(smi_mask, (0, pad_len - smi_mask.shape[1]), 'constant', 0)  # pad sequence length
+        else:
+            smi_mask = smi_token['attention_mask']
         prot_mask = prot_token['attention_mask']
 
         # pass foundation model tokens through lora models
-        smi_rep_lora = self.smi_lora_model(**smi_token)
+        if self.model_config['smi_model_card'] == 'unimol':
+            smi_rep_lora = self.smi_lora_model(**smi_token, return_repr=True, return_atomic_reprs=True)
+            smi_rep_lora = [F.pad(i, (0, 0, 0, pad_len - i.shape[0]), 'constant', 0) for i in smi_rep_lora['atomic_reprs']]
+            smi_rep_lora = torch.stack(smi_rep_lora)
+        else:
+            smi_rep_lora = self.smi_lora_model(**smi_token)
         prot_rep_lora = self.prot_lora_model(**prot_token).last_hidden_state
 
         # projecting smiles representation to consistent dimension
         if self.model_config['combine']['full_smiles_sequence']:
-            smi_rep_new = smi_rep_lora.last_hidden_state
+            if self.model_config['smi_model_card'] == 'unimol':
+                smi_rep_new = smi_rep_lora
+            else:
+                smi_rep_new = smi_rep_lora.last_hidden_state
         else:
             smi_rep_new = smi_rep_lora.pooler_output.unsqueeze(-2)
 
@@ -147,7 +167,7 @@ class LORAX(nn.Module):
             prot_mask
         )
 
-    def create_lora_config(self, model_config):
+    def create_lora_config(self, model_config, model_type):
 
         lora_config = LoraConfig(
             inference_mode=model_config['lora_module']['inference_mode'],
@@ -156,7 +176,7 @@ class LORAX(nn.Module):
             bias=model_config['lora_module']['bias'],
             use_rslora=model_config['lora_module']['use_rslora'],
             modules_to_save=model_config['lora_module']['modules_to_save'],
-            target_modules=model_config['lora_module']['target_modules'],
+            target_modules=model_config['lora_module'][f'target_{model_type}_modules'],
             lora_dropout=model_config['lora_module']['lora_dropout']
         )
 

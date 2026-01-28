@@ -1,5 +1,5 @@
 model:
-    smi_model_card: "DeepChem/ChemBERTa-77M-MTR"
+    smi_model_card: "unimol"
     prot_model_card: "facebook/esm2_t33_650M_UR50D"
     combine:
         mlp_hidden_dim: 512
@@ -18,19 +18,19 @@ model:
         bias: "none"
         use_rslora: False
         modules_to_save: ["pooler.dense.bias", "pooler.dense.weight"]
-        target_smi_modules: ["query", "key", "value"]
+        target_smi_modules: ["linear_q", "linear_k", "linear_v"]
         target_prot_modules: ["query", "key", "value"]
         lora_dropout: 0.1
 
 training:
-    data_path: "data/HC_and_CC/rand_splits"
-    results_path: "results/HC_and_CC/rand" # NOTE: change for different save folder
-    log_path: "logs/HC_and_CC/rand" # NOTE: change for different save folder
+    data_path: "data/M2OR/rand_splits"
+    results_path: "results/M2OR" # NOTE: change for different save folder
+    log_path: "logs/M2OR" # NOTE: change for different save folder
 
 train_lorax:
-    batch_size: 12
-    lr: 0.00001  # NOTE
-    train_epochs: 50
+    batch_size: 21 # NOTE
+    lr: 0.0001
+    train_epochs: 15 # NOTE
 
 train_GB:
     max_evals: 500

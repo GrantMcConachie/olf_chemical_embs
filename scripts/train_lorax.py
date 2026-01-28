@@ -23,6 +23,8 @@ import torch.multiprocessing as mp
 from transformers import AutoModel
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from unimol_tools.models.unimolv2 import UniMolV2Model
+from unimol_tools.data.conformer import UniMolV2Feature
 
 from model.lorax import LORAX
 from data_utils.prot_smi_dataset import ProteinSmilesDataset
@@ -111,10 +113,27 @@ def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset)
         preds = []
         ground_truth = []
 
+        # get unimol featurizer
+        if config['model']['smi_model_card'] == 'unimol':
+            smi_model = UniMolV2Model(
+                pretrained_model_path='/projectnb/depaqlab/Grant/lora/saved_models/unimol/checkpoint.pt',  # TODO: put this in the config file instead of hard code
+                data_type='molecule'
+            )
+            smi_featurizer_unimol = UniMolV2Feature(multi_process=False)
+
+
         for i in dataloader:
             # unpack data
             smi_token, prot_token, y, smiles, prot = i
-            smi_token = {k: v.to(device) for k, v in smi_token.items()}
+
+            if config['model']['smi_model_card'] == 'unimol':
+                smi_token = smi_featurizer_unimol.transform(smiles)[0]
+                smi_token = [(f, None) for f in smi_token]
+                smi_token, _ = smi_model.batch_collate_fn(smi_token)
+                smi_token = {k: v.to(device) for k, v in smi_token.items()}
+            else:
+                smi_token = {k: v.to(device) for k, v in smi_token.items()}
+                
             prot_token = {k: v.to(device) for k, v in prot_token.items()}
             y = y.to(device)
 
@@ -241,7 +260,14 @@ def train(gpu_id, config, split_batches, splits):
     # get foudation models
     smi_model_card = config['model']['smi_model_card']
     prot_model_card = config['model']['prot_model_card']
-    smi_model = AutoModel.from_pretrained(smi_model_card, force_download=True).to(device)
+    if smi_model_card == 'unimol':
+        smi_model = UniMolV2Model(
+            pretrained_model_path='/projectnb/depaqlab/Grant/lora/saved_models/unimol/checkpoint.pt',  # TODO: put this in the config file instead of hard code
+            data_type='molecule'
+        )
+        smi_featurizer_unimol = UniMolV2Feature(multi_process=False)
+    else:
+        smi_model = AutoModel.from_pretrained(smi_model_card, force_download=True).to(device)
     prot_model = AutoModel.from_pretrained(prot_model_card, force_download=True).to(device)
 
     # loop through splits assigned to this gpu
@@ -268,7 +294,13 @@ def train(gpu_id, config, split_batches, splits):
         )
 
         print('reloading models to remove old adapters')
-        smi_model = AutoModel.from_pretrained(smi_model_card, force_download=True).to(device).eval()
+        if smi_model_card == 'unimol':
+            smi_model = UniMolV2Model(
+                pretrained_model_path='/projectnb/depaqlab/Grant/lora/saved_models/unimol/checkpoint.pt',  # TODO: put this in the config file instead of hard code
+                data_type='molecule'
+            )
+        else:
+            smi_model = AutoModel.from_pretrained(smi_model_card, force_download=True).to(device)
         prot_model = AutoModel.from_pretrained(prot_model_card, force_download=True).to(device).eval()
 
         # init model
@@ -316,9 +348,9 @@ def train(gpu_id, config, split_batches, splits):
         for epoch in range(config['train_lorax']['train_epochs']):
 
             # save initial representation
-            if epoch == 0 and split == first_split:
-                print('Saving initial molecular representation')
-                save_molecular_rep(train_data, val_data, test_data, model, config, device, epoch)
+            # if epoch == 0 and split == first_split:
+            #     print('Saving initial molecular representation')
+            #     save_molecular_rep(train_data, val_data, test_data, model, config, device, epoch)
 
             model.train()
             running_loss = []
@@ -329,7 +361,16 @@ def train(gpu_id, config, split_batches, splits):
 
                 # unpack data
                 smi_token, prot_token, y, smiles, prot = dat
-                smi_token = {k: v.to(device) for k, v in smi_token.items()}
+
+                # dealing with unimol
+                if smi_model_card == 'unimol':
+                    with torch.no_grad():
+                        smi_token = smi_featurizer_unimol.transform(smiles)[0]
+                        smi_token = [(f, None) for f in smi_token]
+                        smi_token, _ = smi_model.batch_collate_fn(smi_token)
+                        smi_token = {k: v.to(device) for k, v in smi_token.items()}
+                else:
+                    smi_token = {k: v.to(device) for k, v in smi_token.items()}
                 prot_token = {k: v.to(device) for k, v in prot_token.items()}
                 y = y.to(device)
 
@@ -379,15 +420,15 @@ def train(gpu_id, config, split_batches, splits):
                 # save final molecular representions
                 if split == first_split:
                     print('Saving final molecular representation')
-                    save_molecular_rep(
-                        train_data,
-                        val_data,
-                        test_data,
-                        model,
-                        config,
-                        device,
-                        "final"
-                    )
+                    # save_molecular_rep(
+                    #     train_data,
+                    #     val_data,
+                    #     test_data,
+                    #     model,
+                    #     config,
+                    #     device,
+                    #     "final"
+                    # )
 
                 # update best loss
                 best_loss = avg_val_loss

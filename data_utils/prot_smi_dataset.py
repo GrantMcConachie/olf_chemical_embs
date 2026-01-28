@@ -5,8 +5,11 @@ Dataset utilities for the model.
 import pandas as pd
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
+from unimol_tools.models.unimolv2 import UniMolV2Model
+from unimol_tools.data.conformer import UniMolV2Feature
 
 
 class ProteinSmilesDataset(Dataset):
@@ -21,26 +24,44 @@ class ProteinSmilesDataset(Dataset):
     ):
         # data
         self.df = pd.read_csv(dir)
+        self.smi_model_card = smi_model_card
 
         # length of tokens 
-        self.smi_max_len = smi_model.config.max_position_embeddings-num_special_tokens
+        if smi_model_card == 'unimol':
+            self.smi_max_len = None
+        else:
+            self.smi_max_len = smi_model.config.max_position_embeddings-num_special_tokens
         self.prot_max_len = prot_model.config.max_position_embeddings-num_special_tokens
 
         # tokenizers
-        self.smi_tokenizer = AutoTokenizer.from_pretrained(smi_model_card)
+        if smi_model_card == 'unimol':
+            self.smi_tokenizer = UniMolV2Feature()
+        else:
+            self.smi_tokenizer = AutoTokenizer.from_pretrained(smi_model_card)
         self.prot_tokenizer = AutoTokenizer.from_pretrained(prot_model_card)
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, index):
-        smi_token = self.smi_tokenizer(
-            self.df['SMILES'][index],
-            padding='max_length',  # NOTE: may need to specify this for particular models
-            max_length=self.smi_max_len,
-            truncation=True,
-            return_tensors='pt'
-        )
+        # get smiles representation
+        if self.smi_model_card == 'unimol':
+            # ignoring the smiles tokenization here and moving it into the training script
+            smi_token = 'none'
+
+        else:
+            smi_token = self.smi_tokenizer(
+                self.df['SMILES'][index],
+                padding='max_length',  # NOTE: may need to specify this for particular models
+                max_length=self.smi_max_len,
+                truncation=True,
+                return_tensors='pt'
+            )
+
+            # squeeze dim to batchsize x embedding length
+            smi_token['input_ids'] = smi_token['input_ids'].squeeze()
+            smi_token['attention_mask'] = smi_token['attention_mask'].squeeze()
+
         prot_token = self.prot_tokenizer(
             self.df['Protein sequence'][index],
             padding='max_length',
@@ -48,13 +69,13 @@ class ProteinSmilesDataset(Dataset):
             truncation=True,
             return_tensors='pt'
         )
-        output = self.df['output'][index]
 
         # squeeze dim to batchsize x embedding length
-        smi_token['input_ids'] = smi_token['input_ids'].squeeze()
-        smi_token['attention_mask'] = smi_token['attention_mask'].squeeze()
         prot_token['input_ids'] = prot_token['input_ids'].squeeze()
         prot_token['attention_mask'] = prot_token['attention_mask'].squeeze()
+
+        # output
+        output = self.df['output'][index]
 
         return (
             smi_token,
@@ -73,16 +94,26 @@ class ProteinSmilesDataset(Dataset):
         unique_smiles = self.df['SMILES'].unique()
 
         # generate tokens
-        for smi in unique_smiles:
-            smi_token = self.smi_tokenizer(
-                smi,
-                padding='max_length',  # may need to specify this for particular models
-                max_length=self.smi_max_len,
-                truncation=True,
-                return_tensors='pt'
-            )
-            smiles.append(smi)
-            smi_tokens.append(smi_token)
+        if self.smi_model_card == 'unimol':
+            for smi in unique_smiles:
+                smi_token = self.smi_tokenizer.transform(
+                    [smi]
+                )[0]
+                smi_token = [(f, None) for f in smi_token]  # add dummy label for batching
+                smiles.append(smi)
+                smi_tokens.append(smi_token)
+
+        else:
+            for smi in unique_smiles:
+                smi_token = self.smi_tokenizer(
+                    smi,
+                    padding='max_length',  # may need to specify this for particular models
+                    max_length=self.smi_max_len,
+                    truncation=True,
+                    return_tensors='pt'
+                )
+                smiles.append(smi)
+                smi_tokens.append(smi_token)
 
         return smiles, smi_tokens
     

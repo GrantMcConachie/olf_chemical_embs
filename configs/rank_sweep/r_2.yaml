@@ -13,19 +13,18 @@ model:
 
     lora_module:
         inference_mode: False
-        r: 8
+        r: 2
         lora_alpha: 8
         bias: "none"
         use_rslora: False
         modules_to_save: ["pooler.dense.bias", "pooler.dense.weight"]
-        target_smi_modules: ["query", "key", "value"]
-        target_prot_modules: ["query", "key", "value"]
+        target_modules: ["query", "key", "value"]
         lora_dropout: 0.1
 
 training:
-    data_path: "data/HC_and_CC/rand_splits"
-    results_path: "results/HC_and_CC/rand" # NOTE: change for different save folder
-    log_path: "logs/HC_and_CC/rand" # NOTE: change for different save folder
+    data_path: "data/CC/rand_splits"
+    results_path: "results/CC/rank_sweep/2" # NOTE: change for different save folder
+    log_path: "logs/CC/rank_sweep/2" # NOTE: change for different save folder
 
 train_lorax:
     batch_size: 12

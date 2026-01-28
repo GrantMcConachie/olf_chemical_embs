@@ -24,6 +24,8 @@ import torch
 import torch.multiprocessing as mp
 from transformers import AutoModel
 from torch.utils.tensorboard import SummaryWriter
+from unimol_tools.models.unimolv2 import UniMolV2Model
+from unimol_tools.data.conformer import UniMolV2Feature
 
 import xgboost as xgb
 from hyperopt import fmin, hp, rand
@@ -89,9 +91,24 @@ def generate_model_reps(
 
     # loop through data
     with torch.no_grad():
+        # unimol specific featurizer and model
+        smi_featurizer_unimol = UniMolV2Feature(multi_process=False)
+        smi_model = UniMolV2Model(
+            pretrained_model_path='/projectnb/depaqlab/Grant/lora/saved_models/unimol/checkpoint.pt',  # TODO: put this in the config file instead of hard code
+            data_type='molecule'
+        )
+
         for dat in dataloader:
             smi_token, prot_token, y, smis, prots = dat
-            smi_token = {k: v.to(device) for k, v in smi_token.items()}
+            # dealing with unimol
+            if config['model']['smi_model_card'] == 'unimol':
+                smi_token = smi_featurizer_unimol.transform(smis)[0]
+                smi_token = [(f, None) for f in smi_token]
+                smi_token, _ = smi_model.batch_collate_fn(smi_token)
+                smi_token = {k: v.to(device) for k, v in smi_token.items()}
+            else:
+                smi_token = {k: v.to(device) for k, v in smi_token.items()}
+
             prot_token = {k: v.to(device) for k, v in prot_token.items()}
 
             out = model(smi_token, prot_token)
@@ -148,7 +165,7 @@ def generate_model_reps(
     return cls_reps, prot_smi_reps, prot_smi_cls_reps, smi_prot
 
 
-def generate_foundation_reps(smi_model, prot_model, train_data, val_data, test_data, device, mode='train'):
+def generate_foundation_reps(smi_model, prot_model, train_data, val_data, test_data, config, device, mode='train'):
     """
     generates foundation model representations to feed into xgboost
     """
@@ -168,16 +185,27 @@ def generate_foundation_reps(smi_model, prot_model, train_data, val_data, test_d
     with torch.no_grad():
         all_smi = smi_train + smi_val + smi_test
         all_smi_tokens = smi_tokens_train + smi_tokens_val + smi_tokens_test
-        for smi, token in zip(all_smi, all_smi_tokens):
-            if smi not in smi_reps:
-                token = {k: v.to(device) for k, v in token.items()}
-                smi_mask = token['attention_mask']
-                if mode == 'train':
-                    rep = smi_model(**token).pooler_output
-                if mode == 'inference':
-                    rep = smi_model(**token).last_hidden_state  # embedding
-                    rep = (rep * smi_mask.unsqueeze(-1)).sum(dim=1) / (smi_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
-                smi_reps[smi] = rep.detach().cpu()
+
+        if config['model']['smi_model_card'] == 'unimol':
+            featurizer = UniMolV2Feature(multi_process=False)
+            for smi in all_smi:
+                if smi not in smi_reps:
+                    feats = featurizer.transform([smi])[0]
+                    feats = [(f, None) for f in feats]  # add dummy label for batching
+                    batch_dict, labels = smi_model.batch_collate_fn(feats)
+                    rep = smi_model(**batch_dict, return_repr=True)
+                    smi_reps[smi] = rep.detach().cpu()
+        else:
+            for smi, token in zip(all_smi, all_smi_tokens):
+                if smi not in smi_reps:
+                    token = {k: v.to(device) for k, v in token.items()}
+                    smi_mask = token['attention_mask']
+                    if mode == 'train':
+                        rep = smi_model(**token).pooler_output
+                    if mode == 'inference':
+                        rep = smi_model(**token).last_hidden_state  # embedding
+                        rep = (rep * smi_mask.unsqueeze(-1)).sum(dim=1) / (smi_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
+                    smi_reps[smi] = rep.detach().cpu()
 
         # combine prot tokens
         all_prot = prot_train + prot_val + prot_test
@@ -318,7 +346,13 @@ def train(gpu_id, config, split_batches):
     # load models
     smi_model_card = config['model']['smi_model_card']
     prot_model_card = config['model']['prot_model_card']
-    smi_model = AutoModel.from_pretrained(smi_model_card, force_download=True).to(device).eval()
+    if smi_model_card == 'unimol':
+        smi_model = UniMolV2Model(
+            pretrained_model_path='/projectnb/depaqlab/Grant/lora/saved_models/unimol/checkpoint.pt',  # TODO: put this in the config file instead of hard code
+            data_type='molecule'
+        )
+    else:
+        smi_model = AutoModel.from_pretrained(smi_model_card, force_download=True).to(device)
     prot_model = AutoModel.from_pretrained(prot_model_card, force_download=True).to(device).eval()
 
     # loop through data splits
@@ -367,12 +401,19 @@ def train(gpu_id, config, split_batches):
                     train_data,
                     val_data,
                     test_data,
+                    config,
                     device,
                     'train'
                 )
 
         print('reloading models to remove old adapters')
-        smi_model = AutoModel.from_pretrained(smi_model_card, force_download=True).to(device).eval()
+        if smi_model_card == 'unimol':
+            smi_model = UniMolV2Model(
+                pretrained_model_path='/projectnb/depaqlab/Grant/lora/saved_models/unimol/checkpoint.pt',  # TODO: put this in the config file instead of hard code
+                data_type='molecule'
+            )
+        else:
+            smi_model = AutoModel.from_pretrained(smi_model_card, force_download=True).to(device)
         prot_model = AutoModel.from_pretrained(prot_model_card, force_download=True).to(device).eval()
 
         # load in trained model
