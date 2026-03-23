@@ -520,7 +520,7 @@ def train(gpu_id, config, split_batches):
             recall = recall_score(ground_truth, bin_preds)
             f_score = f1_score(ground_truth, bin_preds)
             mcc = matthews_corrcoef(ground_truth, bin_preds)
-            auroc = roc_auc_score(ground_truth, bin_preds)
+            auroc = roc_auc_score(ground_truth, preds)
             print(f'Epoch {split} | AveP: {ave_p:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f} | F1 score: {f_score:.4f} | MCC: {mcc:.4f} | AUROC: {auroc:.4f}')
 
             # write to tensorboard

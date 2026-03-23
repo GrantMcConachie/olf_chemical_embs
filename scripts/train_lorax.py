@@ -147,7 +147,7 @@ def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset)
             recall = recall_score(ground_truth, bin_preds)
             f_score = f1_score(ground_truth, bin_preds)
             mcc = matthews_corrcoef(ground_truth, bin_preds)
-            auroc = roc_auc_score(ground_truth, bin_preds)
+            auroc = roc_auc_score(ground_truth, preds)
             print(f'Epoch {epoch} | Avg {dataset} Loss: {avg_loss:.4f} | {dataset} AveP: {ave_p:.4f} | {dataset} Precision: {precision:.4f} | {dataset} Recall: {recall:.4f} | {dataset} F1 score: {f_score:.4f} | {dataset} MCC: {mcc:.4f} | {dataset} AUROC: {auroc:.4f}')
 
             # write to tensorboard
