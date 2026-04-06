@@ -124,14 +124,14 @@ class LORAX(nn.Module):
                 query=smi_rep_new,
                 key=prot_rep_lora,
                 value=prot_rep_lora,
-                key_padding_mask=(prot_mask == 0),
+                key_padding_mask=torch.where(prot_mask == 0, float('-inf'), 0.0),  # making this float32 to match attn_mask
                 attn_mask=pocket_attn_bias
             )
             prot_attn, _ = self.prot_MHA(
                 query=prot_rep_lora,
                 key=smi_rep_new,
                 value=smi_rep_new,
-                key_padding_mask=(smi_mask == 0)
+                key_padding_mask=torch.where(smi_mask == 0, float('-inf'), 0.0)
             )
 
             # residual connection + layer norm
