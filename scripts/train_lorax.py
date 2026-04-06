@@ -417,7 +417,7 @@ def main():
     # parse args
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '-c', '--config', type=str, help='Path to config file', required=False, default='configs/config_default.yaml'
+        '-c', '--config', type=str, help='Path to config file', required=True
     )
     args = parser.parse_args()
 
