@@ -86,7 +86,7 @@ class LORAX(nn.Module):
                 nn.Linear(model_config['combine']['mlp_hidden_dim'], 1)
             )
 
-    def forward(self, smi_token, prot_token):
+    def forward(self, smi_token, prot_token, pocket_bias=None):
         # unpack attention masks
         smi_mask = smi_token['attention_mask']
         prot_mask = prot_token['attention_mask']
@@ -106,12 +106,26 @@ class LORAX(nn.Module):
             prot_rep = prot_rep_lora.clone()
 
         else:
+            # build pocket attention bias for smi_MHA (SMILES attends to protein)
+            # pocket_bias: (batch, prot_max_len) -> (batch*num_heads, smi_len, prot_len)
+            pocket_attn_bias = None
+            if pocket_bias is not None:
+                B = pocket_bias.shape[0]
+                smi_len = smi_rep_new.shape[1]
+                prot_len = prot_rep_lora.shape[1]
+                n_heads = self.model_config['combine']['num_heads']
+                pb = pocket_bias[:, :prot_len].to(smi_rep_new.dtype)  # (B, prot_len)
+                pb = pb.unsqueeze(1).expand(B, smi_len, prot_len)     # (B, smi_len, prot_len)
+                pb = pb.unsqueeze(1).expand(B, n_heads, smi_len, prot_len)
+                pocket_attn_bias = pb.reshape(B * n_heads, smi_len, prot_len)
+
             # passing representations through cross attention
             smi_attn, _ = self.smi_MHA(
                 query=smi_rep_new,
                 key=prot_rep_lora,
                 value=prot_rep_lora,
-                key_padding_mask=(prot_mask == 0)
+                key_padding_mask=(prot_mask == 0),
+                attn_mask=pocket_attn_bias
             )
             prot_attn, _ = self.prot_MHA(
                 query=prot_rep_lora,

@@ -35,3 +35,4 @@ training:
   data_path: data/CC/scaf_splits
   log_path: logs/CC/scaf_split_no_prot
   results_path: results/CC/scaf_split_no_prot
+  binding_sites_path: data/CC/binding_sites/binding_sites.csv

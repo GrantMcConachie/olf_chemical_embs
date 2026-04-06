@@ -52,7 +52,7 @@ def save_molecular_rep(train_data, val_data, test_data, model, config, device, d
             smi_tokens[smi] = rep
 
     # get a random protein token
-    _, prot_token, _, _, _ = next(iter(train_data))
+    _, prot_token, _, _, _, _ = next(iter(train_data))
     prot_token['input_ids'] = prot_token['input_ids'].unsqueeze(0)
     prot_token['attention_mask'] = prot_token['attention_mask'].unsqueeze(0)
     prot_token = {k: v.to(device) for k, v in prot_token.items()}
@@ -113,13 +113,14 @@ def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset)
 
         for i in dataloader:
             # unpack data
-            smi_token, prot_token, y, smiles, prot = i
+            smi_token, prot_token, y, smiles, prot, pocket_bias = i
             smi_token = {k: v.to(device) for k, v in smi_token.items()}
             prot_token = {k: v.to(device) for k, v in prot_token.items()}
             y = y.to(device)
+            pocket_bias = pocket_bias.to(device)
 
             # pass through model
-            out = model(smi_token, prot_token)
+            out = model(smi_token, prot_token, pocket_bias)
             pred = out[0].squeeze()
             
             # calculate loss
@@ -179,7 +180,8 @@ def get_dataloaders(
         smi_model,
         prot_model,
         smi_model_card,
-        prot_model_card
+        prot_model_card,
+        binding_sites_path=None
 ):
     """
     generates dataloaders for training
@@ -189,21 +191,24 @@ def get_dataloaders(
         smi_model,
         prot_model,
         smi_model_card,
-        prot_model_card
+        prot_model_card,
+        binding_sites_path=binding_sites_path
     )
     val_data = ProteinSmilesDataset(
         os.path.join(config['training']['data_path'], split, "val_df.csv"),
         smi_model,
         prot_model,
         smi_model_card,
-        prot_model_card
+        prot_model_card,
+        binding_sites_path=binding_sites_path
     )
     test_data = ProteinSmilesDataset(
         os.path.join(config['training']['data_path'], split, "test_df.csv"),
         smi_model,
         prot_model,
         smi_model_card,
-        prot_model_card
+        prot_model_card,
+        binding_sites_path=binding_sites_path
     )
     train_dataloader = DataLoader(
         train_data,
@@ -258,13 +263,15 @@ def train(gpu_id, config, split_batches, splits):
         writer = SummaryWriter(log_dir=log_dir)
 
         # dataloaders
+        binding_sites_path = config['training']['binding_sites_path']
         train_data, val_data, test_data, train_dataloader, val_dataloader, test_dataloader = get_dataloaders(
             config,
             split,
             smi_model,
             prot_model,
             smi_model_card,
-            prot_model_card
+            prot_model_card,
+            binding_sites_path=binding_sites_path
         )
 
         print('reloading models to remove old adapters')
@@ -328,13 +335,14 @@ def train(gpu_id, config, split_batches, splits):
                 optim.zero_grad()
 
                 # unpack data
-                smi_token, prot_token, y, smiles, prot = dat
+                smi_token, prot_token, y, smiles, prot, pocket_bias = dat
                 smi_token = {k: v.to(device) for k, v in smi_token.items()}
                 prot_token = {k: v.to(device) for k, v in prot_token.items()}
                 y = y.to(device)
+                pocket_bias = pocket_bias.to(device)
 
                 # pass through model
-                out = model(smi_token, prot_token)
+                out = model(smi_token, prot_token, pocket_bias)
                 pred = out[0].squeeze()
 
                 # calculate loss and backprop
@@ -409,7 +417,7 @@ def main():
     # parse args
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '-c', '--config', type=str, help='Path to config file', required=True
+        '-c', '--config', type=str, help='Path to config file', required=False, default='configs/config_default.yaml'
     )
     args = parser.parse_args()
 

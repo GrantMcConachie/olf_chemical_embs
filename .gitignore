@@ -20,6 +20,7 @@ batch_scripts_rank_sweep/
 batch_scripts_module_sweep/
 bash_output_rank_sweep/
 bash_output_module_sweep/
+claude_plans/
 
 ##### Boilerplate #####
 
