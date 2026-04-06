@@ -28,7 +28,7 @@ training:
 
 train_lorax:
     batch_size: 12
-    lr: 1e-5  # NOTE
+    lr: 0.00001  # NOTE
     train_epochs: 50
 
 train_GB:
