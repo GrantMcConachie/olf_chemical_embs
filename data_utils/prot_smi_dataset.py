@@ -40,12 +40,20 @@ class ProteinSmilesDataset(Dataset):
         bs_df = pd.read_csv(path)
         for seq, group in bs_df.groupby('sequence'):
             bias = torch.zeros(self.prot_max_len)
-            for _, row in group.iterrows():
-                prob = float(row['probability'])
-                pos = int(row['residue'])
-                # ESM2: CLS at token 0, 1-indexed residue p -> token index p
-                if pos < self.prot_max_len:
-                    bias[pos] = max(bias[pos].item(), prob)
+            probs = torch.tensor(group['probability'].values, dtype=torch.float32)
+            positions = torch.tensor(group['residue'].values, dtype=torch.long)
+
+            # filter out zero-prob (logit(0)=-inf) and out-of-bounds positions
+            valid = (probs > 0) & (positions < self.prot_max_len)
+            probs = probs[valid].clamp(max=1 - 1e-7)
+            positions = positions[valid]
+
+            # logit transform: put probabilities on the same scale as QK^T scores
+            logit_probs = torch.log(probs / (1.0 - probs))
+
+            # scatter max: take max logit per position across all pockets
+            bias.scatter_reduce_(0, positions, logit_probs, reduce='amax', include_self=True)
+
             self.pocket_bias[seq] = bias
 
     def __len__(self):

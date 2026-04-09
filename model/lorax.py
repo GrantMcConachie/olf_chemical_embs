@@ -26,6 +26,7 @@ class LORAX(nn.Module):
         super(LORAX, self).__init__()
         self.model_config = model_config
         self.no_cross_attn = no_cross_attn
+        self.pocket_lambda = model_config['combine'].get('pocket_lambda', 0.0)
 
         # create loara models
         lora_config_smi = self.create_lora_config(model_config)
@@ -106,25 +107,30 @@ class LORAX(nn.Module):
             prot_rep = prot_rep_lora.clone()
 
         else:
-            # build pocket attention bias for smi_MHA (SMILES attends to protein)
-            # pocket_bias: (batch, prot_max_len) -> (batch*num_heads, smi_len, prot_len)
+            lam = self.pocket_lambda
+
+            # build attn_mask: λ * logit(P), shape (B*num_heads, smi_len, prot_len)
+            # pocket_bias already contains logit-transformed probabilities
             pocket_attn_bias = None
-            if pocket_bias is not None:
+            if pocket_bias is not None and lam > 0:
                 B = pocket_bias.shape[0]
                 smi_len = smi_rep_new.shape[1]
                 prot_len = prot_rep_lora.shape[1]
                 n_heads = self.model_config['combine']['num_heads']
-                pb = pocket_bias[:, :prot_len].to(smi_rep_new.dtype)  # (B, prot_len)
-                pb = pb.unsqueeze(1).expand(B, smi_len, prot_len)     # (B, smi_len, prot_len)
+                pb = pocket_bias[:, :prot_len].to(smi_rep_new.dtype) * lam  # (B, prot_len)
+                pb = pb.unsqueeze(1).expand(B, smi_len, prot_len)            # (B, smi_len, prot_len)
                 pb = pb.unsqueeze(1).expand(B, n_heads, smi_len, prot_len)
                 pocket_attn_bias = pb.reshape(B * n_heads, smi_len, prot_len)
 
+            # scale query and key by √(1-λ) to implement (1-λ)*QK^T + λ*logit(P)
+            scale = (1.0 - lam) ** 0.5 if lam > 0 else 1.0
+
             # passing representations through cross attention
             smi_attn, _ = self.smi_MHA(
-                query=smi_rep_new,
-                key=prot_rep_lora,
+                query=smi_rep_new * scale,
+                key=prot_rep_lora * scale,
                 value=prot_rep_lora,
-                key_padding_mask=torch.where(prot_mask == 0, float('-inf'), 0.0),  # making this float32 to match attn_mask
+                key_padding_mask=torch.where(prot_mask == 0, float('-inf'), 0.0),
                 attn_mask=pocket_attn_bias
             )
             prot_attn, _ = self.prot_MHA(
@@ -200,10 +206,12 @@ class LORAX(nn.Module):
             )
 
         else:
+            scale = (1.0 - self.pocket_lambda) ** 0.5 if self.pocket_lambda > 0 else 1.0
+
             # passing representations through cross attention
             smi_attn, smi_attn_weights = self.smi_MHA(
-                query=smi_rep_new,
-                key=prot_rep_lora,
+                query=smi_rep_new * scale,
+                key=prot_rep_lora * scale,
                 value=prot_rep_lora,
                 key_padding_mask=(prot_mask == 0),
                 average_attn_weights=average_attn_weights
