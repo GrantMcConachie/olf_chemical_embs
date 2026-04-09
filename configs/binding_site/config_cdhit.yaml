@@ -24,8 +24,8 @@ model:
 
 training:
     data_path: "data/CC/cdhit_splits"
-    results_path: "results/CC/add_binding_pocket_cdhit" # NOTE: change for different save folder
-    log_path: "logs/CC/add_binding_pocket_cdhit" # NOTE: change for different save folder
+    results_path: "results/CC/binding_pocket/add_binding_pocket_cdhit" # NOTE: change for different save folder
+    log_path: "logs/CC/binding_pocket/add_binding_pocket_cdhit" # NOTE: change for different save folder
     binding_sites_path: data/CC/binding_sites/binding_sites.csv
 
 train_lorax:

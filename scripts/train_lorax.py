@@ -413,16 +413,47 @@ def train(gpu_id, config, split_batches, splits):
         del model, train_data, val_data, test_data, train_dataloader, val_dataloader, _
 
 
+def apply_overrides(config, overrides):
+    """
+    Apply key=value overrides to a nested config dict.
+    Keys use dot notation, e.g. model.combine.pocket_lambda=0.25
+    Values are cast to float, int, or bool where possible, else kept as string.
+    """
+    for item in overrides:
+        key_str, val_str = item.split('=', 1)
+        keys = key_str.split('.')
+        # cast value
+        for cast in (int, float):
+            try:
+                val = cast(val_str)
+                break
+            except ValueError:
+                pass
+        else:
+            val = {'true': True, 'false': False, 'null': None}.get(val_str.lower(), val_str)
+        # walk to parent dict and set
+        d = config
+        for k in keys[:-1]:
+            d = d[k]
+        d[keys[-1]] = val
+
+
 def main():
     # parse args
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '-c', '--config', type=str, help='Path to config file', required=True
     )
+    parser.add_argument(
+        '--override', nargs='*', default=[],
+        help='Override config values using dot notation, e.g. model.combine.pocket_lambda=0.5'
+    )
     args = parser.parse_args()
 
-    # load config
+    # load config and apply any overrides
     config = yaml.safe_load(open(args.config, 'r'))
+    if args.override:
+        apply_overrides(config, args.override)
 
     # split dir
     splits = sorted(os.listdir(config['training']['data_path']))

@@ -24,8 +24,8 @@ model:
 
 training:
     data_path: "data/CC/rand_splits"
-    results_path: "results/CC/no_binding_pocket_rand" # NOTE: change for different save folder
-    log_path: "logs/CC/no_binding_pocket_rand" # NOTE: change for different save folder
+    results_path: "results/CC/binding_pocket/no_binding_pocket_rand" # NOTE: change for different save folder
+    log_path: "logs/CC/binding_pocket/no_binding_pocket_rand" # NOTE: change for different save folder
     binding_sites_path: null
 
 train_lorax:
