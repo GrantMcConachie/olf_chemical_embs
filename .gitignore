@@ -21,6 +21,8 @@ batch_scripts_module_sweep/
 bash_output_rank_sweep/
 bash_output_module_sweep/
 claude_plans/
+batch_scripts/
+scripts/plot_lam_sweep.py
 
 ##### Boilerplate #####
 
