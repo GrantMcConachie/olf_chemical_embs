@@ -12,6 +12,7 @@ logs/
 results/
 test_scripts/
 scripts/plot_attn_weights.py
+scripts/plot_lam_sweep.py
 scripts/run_inference.py
 batch_inference.sh
 scripts/brian_readme.md

@@ -96,9 +96,9 @@ def save_model(model, config, split):
     )
     os.makedirs(save_path, exist_ok=True)
     model_fp = f'{config['model']['smi_model_card'].split('/')[-1]}_{config['model']['prot_model_card'].split('/')[-1]}_{split}.pt'
-    torch.save(
-        model.state_dict(), os.path.join(save_path, model_fp)
-    )
+    trainable_params = {name for name, param in model.named_parameters() if param.requires_grad}
+    trainable_state = {k: v for k, v in model.state_dict().items() if k in trainable_params}
+    torch.save(trainable_state, os.path.join(save_path, model_fp))
 
 
 def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset):
@@ -465,7 +465,7 @@ def main():
         split_batches = [[] for _ in range(n_gpus)]
         for i, split in enumerate(splits):
             split_batches[i % n_gpus].append(split)
-        
+
         # call main training function
         mp.spawn(
             train,

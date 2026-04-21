@@ -408,7 +408,7 @@ def train(gpu_id, config, split_batches):
             del state_dict['mlp.4.weight']
             del state_dict['mlp.4.bias']
 
-        model.load_state_dict(state_dict)
+        model.load_state_dict(state_dict, strict=False)
         model.eval()
 
         # generate model representation

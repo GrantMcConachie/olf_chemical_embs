@@ -151,7 +151,7 @@ class LORAX(nn.Module):
         prot_mask = prot_mask.float()
         smi_rep = (smi_rep * smi_mask.unsqueeze(-1)).sum(dim=1) / (smi_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
         prot_rep = (prot_rep * prot_mask.unsqueeze(-1)).sum(dim=1) / (prot_mask.unsqueeze(-1).sum(dim=1) + 1e-8)
-        
+
         # concatenate
         cat_rep = torch.cat((smi_rep, prot_rep), -1)
 
