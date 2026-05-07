@@ -1,4 +1,4 @@
-# olf_chemical_embs
+# lorax
 This is a repo for **L**oRA-based **O**dorant-**R**eceptor **A**ffinity prediction with **CROSS**-attention (**LORAX**) from [this](https://openreview.net/forum?id=BUUfUcIcfE) paper. The code for the benchmarking study performed in the paper can be found [here](https://github.com/GrantMcConachie/olfactory_foundation_models).
 
 ![alt text](intro-fig.png)
