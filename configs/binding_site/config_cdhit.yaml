@@ -11,6 +11,7 @@ model:
         no_prot_model_ft: True
         lin_proj: False
         pocket_lambda: 0.5
+        single_cross_attn: True
 
     lora_module:
         inference_mode: False

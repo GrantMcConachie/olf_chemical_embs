@@ -6,6 +6,7 @@ model:
     mlp_hidden_dim: 512
     no_cross_attn: false
     no_prot_model_ft: true
+    single_cross_attn: false
     num_heads: 8
     smiles_hidden_dim: 256
   lora_module:

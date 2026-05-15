@@ -133,12 +133,17 @@ class LORAX(nn.Module):
                 key_padding_mask=torch.where(prot_mask == 0, float('-inf'), 0.0),
                 attn_mask=pocket_attn_bias
             )
-            prot_attn, _ = self.prot_MHA(
-                query=prot_rep_lora,
-                key=smi_rep_new,
-                value=smi_rep_new,
-                key_padding_mask=torch.where(smi_mask == 0, float('-inf'), 0.0)
-            )
+
+            # enforcing one cross attn
+            if self.model_config['combine']['single_cross_attn']:
+                prot_attn = torch.zeros_like(prot_rep_lora)
+            else:
+                prot_attn, _ = self.prot_MHA(
+                    query=prot_rep_lora,
+                    key=smi_rep_new,
+                    value=smi_rep_new,
+                    key_padding_mask=torch.where(smi_mask == 0, float('-inf'), 0.0)
+                )
 
             # residual connection + layer norm
             smi_rep = smi_attn + smi_rep_new

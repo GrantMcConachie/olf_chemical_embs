@@ -10,6 +10,7 @@ model:
         no_cross_attn: True
         no_prot_model_ft: False
         lin_proj: False
+        single_cross_attn: False
 
     lora_module:
         inference_mode: False
