@@ -3,8 +3,14 @@ Script to train the lora model
 """
 
 import os
+# Must be set before the first CUDA/cuBLAS call so deterministic cuBLAS GEMM
+# kernels can be selected (required by torch.use_deterministic_algorithms).
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
 import yaml
+import random
 import argparse
+import numpy as np
 import pickle as pkl
 from tqdm import tqdm
 from sklearn.metrics import (
@@ -27,6 +33,38 @@ from torch.utils.tensorboard import SummaryWriter
 from model.lorax import LORAX
 from data_utils.prot_smi_dataset import ProteinSmilesDataset
 from loss_functions.loss_functions import M2ORWeightedCrossEntropyLoss
+
+
+def set_seed(seed, deterministic=True):
+    """
+    Seed every RNG that influences training so runs are reproducible.
+
+    Covers Python, NumPy and PyTorch (CPU + all CUDA devices). When
+    ``deterministic`` is set we additionally pin cuDNN and request
+    deterministic algorithms everywhere they exist. ``warn_only=True`` keeps
+    ops that lack a deterministic kernel from raising -- they warn and fall
+    back instead, so this never crashes a run. The performance cost here is
+    minor: the large protein model is frozen, cached and run under no_grad,
+    so only the small trainable modules are affected.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(True, warn_only=True)
+
+
+def seed_worker(worker_id):
+    """
+    Seed a DataLoader worker deterministically from the base torch seed so
+    runs stay reproducible if ``num_workers`` > 0 is ever enabled.
+    """
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 def save_molecular_rep(train_data, val_data, test_data, model, config, device, designation):
@@ -179,7 +217,8 @@ def get_dataloaders(
         smi_model,
         prot_model,
         smi_model_card,
-        prot_model_card
+        prot_model_card,
+        generator=None
 ):
     """
     generates dataloaders for training
@@ -208,7 +247,9 @@ def get_dataloaders(
     train_dataloader = DataLoader(
         train_data,
         shuffle=True,
-        batch_size=config['train_lorax']['batch_size']
+        batch_size=config['train_lorax']['batch_size'],
+        generator=generator,  # deterministic shuffle order
+        worker_init_fn=seed_worker
     )
     val_dataloader = DataLoader(
         val_data,
@@ -238,6 +279,10 @@ def train(gpu_id, config, split_batches, splits):
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else "cpu")
     print(f'Training loop for split {splits_for_this_gpu} on {device}')
 
+    # reproducibility settings (defaults keep older configs working)
+    base_seed = config['training'].get('seed', 42)
+    deterministic = config['training'].get('deterministic', True)
+
     # get foudation models
     smi_model_card = config['model']['smi_model_card']
     prot_model_card = config['model']['prot_model_card']
@@ -247,6 +292,15 @@ def train(gpu_id, config, split_batches, splits):
     # loop through splits assigned to this gpu
     for split in splits_for_this_gpu:
         print(f'Split: {split}')
+
+        # Seed per split using a stable, GPU-assignment-independent offset so a
+        # given split trains identically regardless of how many GPUs are used
+        # or which one it lands on. This reseeds before model init and data
+        # shuffling, the two RNG-consuming steps below.
+        split_seed = base_seed + splits.index(split)
+        set_seed(split_seed, deterministic=deterministic)
+        data_generator = torch.Generator()
+        data_generator.manual_seed(split_seed)
 
         # create tensorboard log
         log_dir = os.path.join(
@@ -264,7 +318,8 @@ def train(gpu_id, config, split_batches, splits):
             smi_model,
             prot_model,
             smi_model_card,
-            prot_model_card
+            prot_model_card,
+            generator=data_generator
         )
 
         print('reloading models to remove old adapters')
