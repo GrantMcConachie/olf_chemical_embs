@@ -13,6 +13,9 @@ import argparse
 import numpy as np
 import pickle as pkl
 from tqdm import tqdm
+import matplotlib
+matplotlib.use('Agg')  # non-interactive backend, safe on headless cluster nodes
+import matplotlib.pyplot as plt
 from sklearn.metrics import (
     r2_score,
     average_precision_score,
@@ -207,6 +210,18 @@ def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset)
             writer.add_scalar(f'Loss/{dataset}', avg_loss, epoch)
             writer.add_scalar(f'{dataset}_metrics/{dataset}/R2', r2, epoch)
             writer.add_scalar(f'{dataset}_metrics/{dataset}/CI', ci, epoch)
+
+            # scatter of predictions vs. actual
+            fig, ax = plt.subplots(figsize=(5, 5))
+            ax.scatter(ground_truth, preds, s=8, alpha=0.5)
+            lims = [min(ground_truth.min(), preds.min()),
+                    max(ground_truth.max(), preds.max())]
+            ax.plot(lims, lims, 'k--', linewidth=1)  # y = x reference
+            ax.set_xlabel('Actual')
+            ax.set_ylabel('Predicted')
+            ax.set_title(f'{dataset} (R2={r2:.3f})')
+            writer.add_figure(f'{dataset}_scatter/pred_vs_actual', fig, epoch)
+            plt.close(fig)
 
     return avg_loss
 
