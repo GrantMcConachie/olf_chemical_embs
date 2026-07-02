@@ -32,6 +32,7 @@ import torch.multiprocessing as mp
 from transformers import AutoModel
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+import wandb
 
 from model.lorax import LORAX
 from data_utils.prot_smi_dataset import ProteinSmilesDataset
@@ -200,6 +201,17 @@ def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset)
             writer.add_scalar(f'{dataset}_metrics/MCC', mcc, epoch)
             writer.add_scalar(f'{dataset}_metrics/AUROC', auroc, epoch)
 
+            # write to wandb
+            wandb.log({
+                f'Loss/{dataset}': avg_loss,
+                f'{dataset}_metrics/AveP': ave_p,
+                f'{dataset}_metrics/Precision': precision,
+                f'{dataset}_metrics/Recall': recall,
+                f'{dataset}_metrics/F1': f_score,
+                f'{dataset}_metrics/MCC': mcc,
+                f'{dataset}_metrics/AUROC': auroc,
+            }, step=epoch)
+
         else:
             preds = torch.concat(preds).cpu().numpy()
             r2 = r2_score(ground_truth, preds)
@@ -221,6 +233,15 @@ def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset)
             ax.set_ylabel('Predicted')
             ax.set_title(f'{dataset} (R2={r2:.3f})')
             writer.add_figure(f'{dataset}_scatter/pred_vs_actual', fig, epoch)
+
+            # write to wandb
+            wandb.log({
+                f'Loss/{dataset}': avg_loss,
+                f'{dataset}_metrics/{dataset}/R2': r2,
+                f'{dataset}_metrics/{dataset}/CI': ci,
+                f'{dataset}_scatter/pred_vs_actual': wandb.Image(fig),
+            }, step=epoch)
+
             plt.close(fig)
 
     return avg_loss
@@ -325,6 +346,15 @@ def train(gpu_id, config, split_batches, splits):
             split
         )
         writer = SummaryWriter(log_dir=log_dir)
+
+        # create wandb run (one per split)
+        wandb.init(
+            project=config['training'].get('wandb_project', 'lorax'),
+            name=f"{smi_model_card.split('/')[-1]}-lorax-{split}",
+            group=smi_model_card.split('/')[-1],
+            config=config,
+            reinit=True,
+        )
 
         # dataloaders
         train_data, val_data, test_data, train_dataloader, val_dataloader, test_dataloader = get_dataloaders(
@@ -465,11 +495,13 @@ def train(gpu_id, config, split_batches, splits):
             # report train loss
             avg_loss = sum(running_loss) / len(running_loss)
             writer.add_scalar("Loss/train", avg_loss, epoch)
+            wandb.log({"Loss/train": avg_loss}, step=epoch)
             print(f"Epoch {epoch} | Avg Loss: {avg_loss:.4f}")
         
         # write all pending events to log and close
         writer.flush()
         writer.close()
+        wandb.finish()
 
         # cleanup
         del model, train_data, val_data, test_data, train_dataloader, val_dataloader, _
