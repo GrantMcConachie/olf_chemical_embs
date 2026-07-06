@@ -129,7 +129,17 @@ def save_molecular_rep(train_data, val_data, test_data, model, config, device, d
 
 def save_model(model, config, split):
     """
-    Saves model
+    Saves the model's state dict.
+
+    When the protein model is frozen (``no_prot_model_ft``) its weights never
+    change from the pretrained ESM2 checkpoint, so persisting them for every
+    experiment/split wastes a large amount of storage (~650M params). In that
+    case we drop the protein sub-model (``prot_lora_model.*``) from the saved
+    state dict; it is restored from ``AutoModel.from_pretrained`` when the
+    checkpoint is loaded (see the loader in ``scripts/train_GB.py``). The
+    trainable heads -- including the protein-side cross-attention
+    (``prot_MHA``) and layer norm (``prot_layer_norm``) -- are separate
+    top-level modules and are always saved.
     """
     save_path = os.path.join(
         config['training']['results_path'],
@@ -138,9 +148,16 @@ def save_model(model, config, split):
     )
     os.makedirs(save_path, exist_ok=True)
     model_fp = f'{config['model']['smi_model_card'].split('/')[-1]}_{config['model']['prot_model_card'].split('/')[-1]}_{split}.pt'
-    torch.save(
-        model.state_dict(), os.path.join(save_path, model_fp)
-    )
+
+    state_dict = model.state_dict()
+    if config['model']['combine']['no_prot_model_ft']:
+        # frozen protein branch == pretrained ESM2, so don't persist it
+        state_dict = {
+            k: v for k, v in state_dict.items()
+            if not k.startswith('prot_lora_model.')
+        }
+
+    torch.save(state_dict, os.path.join(save_path, model_fp))
 
 
 def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset):
