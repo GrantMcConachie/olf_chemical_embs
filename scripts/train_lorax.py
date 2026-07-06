@@ -518,8 +518,15 @@ def main():
     # load config
     config = yaml.safe_load(open(args.config, 'r'))
 
-    # split dir
-    splits = sorted(os.listdir(config['training']['data_path']))
+    # split dir — each split is a subdirectory of data_path containing
+    # train/val/test CSVs. If there are no subdirectories, treat data_path
+    # itself as a single split (the CSVs live directly inside it).
+    data_path = config['training']['data_path'].rstrip('/')
+    splits = sorted(d for d in os.listdir(data_path)
+                    if os.path.isdir(os.path.join(data_path, d)))
+    if not splits:
+        config['training']['data_path'] = os.path.dirname(data_path)
+        splits = [os.path.basename(data_path)]
 
     # distribute across gpus
     n_gpus = torch.cuda.device_count()
