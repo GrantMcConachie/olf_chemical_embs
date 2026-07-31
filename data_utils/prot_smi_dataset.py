@@ -54,10 +54,24 @@ class ProteinSmilesDataset(Dataset):
             return_tensors="pt",
         )
 
+        # build pocket weight, hard code file path for testing
+        df_bp = pd.read_csv("data/CC/binding_sites/binding_sites.csv")
+        self.pocket_masks = {}
+        for seq, group in df_bp.groupby("sequence"):
+            positions = group.loc[group["pocket"] == "pocket1", "residue"].values
+            positions = torch.tensor(positions, dtype=torch.long)
+            pocket_mask = torch.zeros(self.prot_max_len)
+            pocket_mask[positions[positions < self.prot_max_len]] = 1.0
+            self.pocket_masks[seq] = pocket_mask
+
+        missing = set(self.df["Protein sequence"]) - set(self.pocket_masks)
+        assert not missing, f"{len(missing)} proteins missing from binding_sites.csv"
+
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, index):
+
         smile_id = self.smile_ids[index]
         protein_id = self.protein_ids[index]
         smi_token = {
@@ -69,12 +83,15 @@ class ProteinSmilesDataset(Dataset):
             "attention_mask": self.tokenized_proteins["attention_mask"][protein_id],
         }
 
+        prot_seq = self.df["Protein sequence"][index]
+
         return (
             smi_token,
             prot_token,
+            self.pocket_masks[prot_seq],
             torch.tensor(self.df["output"][index], dtype=torch.float32),
             self.df["SMILES"][index],  # smiles
-            self.df["Protein sequence"][index],
+            prot_seq,
         )
 
     def get_unique_smiles_rep(self):

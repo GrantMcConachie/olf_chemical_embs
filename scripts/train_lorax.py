@@ -98,7 +98,7 @@ def save_molecular_rep(
             smi_tokens[smi] = rep
 
     # get a random protein token
-    _, prot_token, _, _, _ = next(iter(train_data))
+    _, prot_token, _, _, _, _ = next(iter(train_data))
     prot_token["input_ids"] = prot_token["input_ids"].unsqueeze(0)
     prot_token["attention_mask"] = prot_token["attention_mask"].unsqueeze(0)
     prot_token = {k: v.to(device) for k, v in prot_token.items()}
@@ -180,13 +180,14 @@ def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset)
 
         for i in dataloader:
             # unpack data
-            smi_token, prot_token, y, smiles, prot = i
+            smi_token, prot_token, pocket_mask, y, smiles, prot = i
             smi_token = {k: v.to(device) for k, v in smi_token.items()}
             prot_token = {k: v.to(device) for k, v in prot_token.items()}
+            pocket_mask = pocket_mask.to(device)
             y = y.to(device)
 
             # pass through model
-            out = model(smi_token, prot_token)
+            out = model(smi_token, prot_token, pocket_mask)
             pred = out[0].squeeze()
 
             # calculate loss
@@ -321,7 +322,7 @@ def get_dataloaders(
         train_data,
         shuffle=True,
         batch_size=config["train_lorax"]["batch_size"],
-        num_workers=2,
+        num_workers=0,
         pin_memory=True,
         generator=generator,  # deterministic shuffle order
         worker_init_fn=seed_worker,
@@ -332,13 +333,13 @@ def get_dataloaders(
     val_dataloader = DataLoader(
         val_data,
         batch_size=val_batch_size,
-        num_workers=2,
+        num_workers=0,
         pin_memory=True,
     )
     test_dataloader = DataLoader(
         test_data,
         batch_size=val_batch_size,
-        num_workers=2,
+        num_workers=0,
         pin_memory=True,
     )
 
@@ -477,13 +478,14 @@ def train(gpu_id, config, split_batches, splits):
                 optim.zero_grad()
 
                 # unpack data
-                smi_token, prot_token, y, smiles, prot = dat
+                smi_token, prot_token, pocket_mask, y, smiles, prot = dat
                 smi_token = {k: v.to(device) for k, v in smi_token.items()}
                 prot_token = {k: v.to(device) for k, v in prot_token.items()}
+                pocket_mask = pocket_mask.to(device)
                 y = y.to(device)
 
                 # pass through model
-                out = model(smi_token, prot_token)
+                out = model(smi_token, prot_token, pocket_mask)
                 pred = out[0].squeeze()
 
                 # calculate loss and backprop
