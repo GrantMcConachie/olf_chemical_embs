@@ -9,7 +9,6 @@ import os
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import argparse
-import pickle as pkl
 import random
 
 import matplotlib
@@ -20,7 +19,6 @@ from tqdm import tqdm
 matplotlib.use("Agg")  # non-interactive backend, safe on headless cluster nodes
 import matplotlib.pyplot as plt
 import torch
-import torch.multiprocessing as mp
 from lifelines.utils import concordance_index
 from sklearn.metrics import (
     average_precision_score,
@@ -73,70 +71,7 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 
-def save_molecular_rep(
-    train_data, val_data, test_data, model, config, device, designation
-):
-    """
-    Saves molecular representations over training
-    """
-    # init arrays
-    smiles = []
-    smi_reps = []
-    rep_attn_masks = []
-
-    # getting smiles tokens
-    smi_train, smi_reps_train = train_data.get_unique_smiles_rep()
-    smi_val, smi_reps_val = val_data.get_unique_smiles_rep()
-    smi_test, smi_reps_test = test_data.get_unique_smiles_rep()
-
-    # combine smiles tokens
-    smi_tokens = {}
-    all_smi = smi_train + smi_val + smi_test
-    all_reps = smi_reps_train + smi_reps_val + smi_reps_test
-    for smi, rep in zip(all_smi, all_reps):
-        if smi not in smi_tokens:
-            smi_tokens[smi] = rep
-
-    # get a random protein token
-    _, prot_token, _, _, _, _ = next(iter(train_data))
-    prot_token["input_ids"] = prot_token["input_ids"].unsqueeze(0)
-    prot_token["attention_mask"] = prot_token["attention_mask"].unsqueeze(0)
-    prot_token = {k: v.to(device) for k, v in prot_token.items()}
-
-    # get model representation of all smiles
-    model.eval()
-    with torch.no_grad():
-        for key, value in smi_tokens.items():
-            smi_token = value
-            smi_token = {k: v.to(device) for k, v in smi_token.items()}
-            out = model(smi_token, prot_token)
-            smi_rep = out[1]
-            rep_attn_mask = out[2]
-
-            # append arrays
-            smiles.append(key)
-            smi_reps.append(smi_rep.cpu())
-            rep_attn_masks.append(rep_attn_mask.cpu())
-
-    # save representations
-    save_path = os.path.join(
-        config["training"]["results_path"],
-        config["model"]["smi_model_card"].split("/")[-1],
-        "saved_representations",
-    )
-    os.makedirs(save_path, exist_ok=True)
-
-    pkl.dump(smiles, open(os.path.join(save_path, f"smiles_{designation}.pkl"), "wb"))
-    pkl.dump(
-        smi_reps, open(os.path.join(save_path, f"smi_reps_{designation}.pkl"), "wb")
-    )
-    pkl.dump(
-        rep_attn_masks,
-        open(os.path.join(save_path, f"rep_attn_masks_{designation}.pkl"), "wb"),
-    )
-
-
-def save_model(model, config, split):
+def save_model(model, config):
     """
     Saves the model's state dict.
 
@@ -150,13 +85,7 @@ def save_model(model, config, split):
     (``prot_MHA``) and layer norm (``prot_layer_norm``) -- are separate
     top-level modules and are always saved.
     """
-    save_path = os.path.join(
-        config["training"]["results_path"],
-        config["model"]["smi_model_card"].split("/")[-1],
-        split,
-    )
-    os.makedirs(save_path, exist_ok=True)
-    model_fp = f"{config['model']['smi_model_card'].split('/')[-1]}_{config['model']['prot_model_card'].split('/')[-1]}_{split}.pt"
+    os.makedirs(config["training"]["save_path"], exist_ok=True)
 
     state_dict = model.state_dict()
     if config["model"]["combine"]["no_prot_model_ft"]:
@@ -165,7 +94,7 @@ def save_model(model, config, split):
             k: v for k, v in state_dict.items() if not k.startswith("prot_lora_model.")
         }
 
-    torch.save(state_dict, os.path.join(save_path, model_fp))
+    torch.save(state_dict, os.path.join(config["training"]["save_path"], "model.pt"))
 
 
 def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset):
@@ -285,34 +214,53 @@ def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset)
     return avg_loss
 
 
-def get_dataloaders(
-    config,
-    split,
-    smi_model,
-    prot_model,
-    smi_model_card,
-    prot_model_card,
-    generator=None,
-):
+def train(config):
     """
-    generates dataloaders for training
+    Main training loop for LORAX
     """
+    # setup device and splits
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # reproducibility settings (defaults keep older configs working)
+    split_seed = config["training"].get("seed", 42)
+    deterministic = config["training"].get("deterministic", True)
+
+    # get foudation models
+    smi_model_card = config["model"]["smi_model_card"]
+    prot_model_card = config["model"]["prot_model_card"]
+    smi_model = AutoModel.from_pretrained(smi_model_card).to(device)
+    prot_model = AutoModel.from_pretrained(prot_model_card).to(device)
+
+    # Seed per split using a stable, GPU-assignment-independent offset so a
+    # given split trains identically regardless of how many GPUs are used
+    # or which one it lands on. This reseeds before model init and data
+    # shuffling, the two RNG-consuming steps below.
+    set_seed(split_seed, deterministic=deterministic)
+    data_generator = torch.Generator()
+    data_generator.manual_seed(split_seed)
+
+    # create tensorboard log
+    writer = SummaryWriter(log_dir=config["training"]["save_path"])
+
+    # create wandb run (one per split)
+    wandb.init(
+        project=config["training"].get("wandb_project", "lorax"),
+        name=f"{config['training']['save_path'].split('/')[-1]}",
+        group=f"{config['training']['save_path'].split('/')[-2]}",
+        config=config,
+        reinit=True,
+    )
+
+    # dataloaders
     train_data = ProteinSmilesDataset(
-        os.path.join(config["training"]["data_path"], split, "train_df.csv"),
+        os.path.join(config["training"]["data_path"], "train_df.csv"),
         smi_model,
         prot_model,
         smi_model_card,
         prot_model_card,
     )
     val_data = ProteinSmilesDataset(
-        os.path.join(config["training"]["data_path"], split, "val_df.csv"),
-        smi_model,
-        prot_model,
-        smi_model_card,
-        prot_model_card,
-    )
-    test_data = ProteinSmilesDataset(
-        os.path.join(config["training"]["data_path"], split, "test_df.csv"),
+        os.path.join(config["training"]["data_path"], "val_df.csv"),
         smi_model,
         prot_model,
         smi_model_card,
@@ -324,7 +272,7 @@ def get_dataloaders(
         batch_size=config["train_lorax"]["batch_size"],
         num_workers=0,
         pin_memory=True,
-        generator=generator,  # deterministic shuffle order
+        generator=data_generator,  # deterministic shuffle order
         worker_init_fn=seed_worker,
     )
     val_batch_size = config["train_lorax"].get(
@@ -336,206 +284,95 @@ def get_dataloaders(
         num_workers=0,
         pin_memory=True,
     )
-    test_dataloader = DataLoader(
-        test_data,
-        batch_size=val_batch_size,
-        num_workers=0,
-        pin_memory=True,
+
+    # init model
+    model = LORAX(
+        model_config=config["model"],
+        smi_model=smi_model,
+        prot_model=prot_model,
+        no_cross_attn=config["model"]["combine"]["no_cross_attn"],
+        no_prot_model_ft=config["model"]["combine"]["no_prot_model_ft"],
+        lin_proj=config["model"]["combine"]["lin_proj"],
+    ).to(device)
+
+    # init optimizer and loss_fn
+    optim = torch.optim.Adam(params=model.parameters(), lr=config["train_lorax"]["lr"])
+
+    # use special loss function for M2OR data
+    if "data/M2OR" in config["training"]["data_path"]:
+        loss_fn = M2ORWeightedCrossEntropyLoss(config["training"]["data_path"])
+    else:
+        loss_fn = torch.nn.MSELoss()
+
+    # look at parameters
+    tot_train_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    tot_params = sum(p.numel() for p in model.parameters())
+    print("combo model:")
+    print(
+        "trainable params:",
+        f"{tot_train_params:,}",
+        " || all params:",
+        f"{tot_params:,}",
+        " || trainable%:",
+        f"{(tot_train_params / tot_params) * 100:0.04}",
     )
 
-    return (
-        train_data,
-        val_data,
-        test_data,
-        train_dataloader,
-        val_dataloader,
-        test_dataloader,
-    )
+    # training loop
+    best_loss = 1e10
+    for epoch in range(config["train_lorax"]["train_epochs"]):
+        model.train()
+        running_loss = []
 
+        for dat in tqdm(train_dataloader, desc=f"Epoch {epoch} | batch"):
+            # zero gradients
+            optim.zero_grad()
 
-def train(gpu_id, config, split_batches, splits):
-    """
-    Main training loop for LORAX
-    """
-    # setup device and splits
-    splits_for_this_gpu = split_batches[gpu_id]
-    device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
-    print(f"Training loop for split {splits_for_this_gpu} on {device}")
+            # unpack data
+            smi_token, prot_token, pocket_mask, y, smiles, prot = dat
+            smi_token = {k: v.to(device) for k, v in smi_token.items()}
+            prot_token = {k: v.to(device) for k, v in prot_token.items()}
+            pocket_mask = pocket_mask.to(device)
+            y = y.to(device)
 
-    # reproducibility settings (defaults keep older configs working)
-    base_seed = config["training"].get("seed", 42)
-    deterministic = config["training"].get("deterministic", True)
+            # pass through model
+            out = model(smi_token, prot_token, pocket_mask)
+            pred = out[0].squeeze()
 
-    # get foudation models
-    smi_model_card = config["model"]["smi_model_card"]
-    prot_model_card = config["model"]["prot_model_card"]
-    smi_model = AutoModel.from_pretrained(smi_model_card).to(device)
-    prot_model = AutoModel.from_pretrained(prot_model_card).to(device)
+            # calculate loss and backprop
+            if "data/M2OR" in config["training"]["data_path"]:
+                loss = loss_fn(pred, y, smiles, prot)
+            else:
+                loss = loss_fn(pred, y)
 
-    # loop through splits assigned to this gpu
-    for split in splits_for_this_gpu:
-        print(f"Split: {split}")
+            loss.backward()
+            optim.step()
 
-        # Seed per split using a stable, GPU-assignment-independent offset so a
-        # given split trains identically regardless of how many GPUs are used
-        # or which one it lands on. This reseeds before model init and data
-        # shuffling, the two RNG-consuming steps below.
-        split_seed = base_seed + splits.index(split)
-        set_seed(split_seed, deterministic=deterministic)
-        data_generator = torch.Generator()
-        data_generator.manual_seed(split_seed)
+            # bookeeping
+            running_loss.append(loss.item())
 
-        # create tensorboard log
-        log_dir = os.path.join(
-            config["training"]["log_path"],
-            smi_model_card.split("/")[-1],
-            "lorax",
-            split,
-        )
-        writer = SummaryWriter(log_dir=log_dir)
-
-        # create wandb run (one per split)
-        wandb.init(
-            project=config["training"].get("wandb_project", "lorax"),
-            name=f"{smi_model_card.split('/')[-1]}-lorax-{split}",
-            group=smi_model_card.split("/")[-1],
-            config=config,
-            reinit=True,
+        # evaluate
+        avg_val_loss = evaluate(
+            config, model, val_dataloader, device, loss_fn, epoch, writer, "val"
         )
 
-        # dataloaders
-        (
-            train_data,
-            val_data,
-            test_data,
-            train_dataloader,
-            val_dataloader,
-            test_dataloader,
-        ) = get_dataloaders(
-            config,
-            split,
-            smi_model,
-            prot_model,
-            smi_model_card,
-            prot_model_card,
-            generator=data_generator,
-        )
+        # save model when the best validation loss happens
+        if avg_val_loss < best_loss:
+            save_model(model, config)
+            writer.add_scalar("Model/best_model", epoch, epoch)
 
-        print("reloading models to remove old adapters")
-        smi_model = AutoModel.from_pretrained(smi_model_card).to(device).eval()
-        prot_model = AutoModel.from_pretrained(prot_model_card).to(device).eval()
+            # update best loss
+            best_loss = avg_val_loss
 
-        # init model
-        model = LORAX(
-            model_config=config["model"],
-            smi_model=smi_model,
-            prot_model=prot_model,
-            no_cross_attn=config["model"]["combine"]["no_cross_attn"],
-            no_prot_model_ft=config["model"]["combine"]["no_prot_model_ft"],
-            lin_proj=config["model"]["combine"]["lin_proj"],
-        ).to(device)
+        # report train loss
+        avg_loss = sum(running_loss) / len(running_loss)
+        writer.add_scalar("Loss/train", avg_loss, epoch)
+        wandb.log({"Loss/train": avg_loss}, step=epoch)
+        print(f"Epoch {epoch} | Avg Loss: {avg_loss:.4f}")
 
-        # init optimizer and loss_fn
-        optim = torch.optim.Adam(
-            params=model.parameters(), lr=config["train_lorax"]["lr"]
-        )
-
-        # use special loss function for M2OR data
-        if "data/M2OR" in config["training"]["data_path"]:
-            loss_fn = M2ORWeightedCrossEntropyLoss(config["training"]["data_path"])
-        else:
-            loss_fn = torch.nn.MSELoss()
-
-        # look at parameters
-        tot_train_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        tot_params = sum(p.numel() for p in model.parameters())
-        print("combo model:")
-        print(
-            "trainable params:",
-            f"{tot_train_params:,}",
-            " || all params:",
-            f"{tot_params:,}",
-            " || trainable%:",
-            f"{(tot_train_params / tot_params) * 100:0.04}",
-        )
-
-        # training loop
-        best_loss = 1e10
-        first_split = splits[0]
-        for epoch in range(config["train_lorax"]["train_epochs"]):
-            # save initial representation
-            if epoch == 0 and split == first_split:
-                print("Saving initial molecular representation")
-                save_molecular_rep(
-                    train_data, val_data, test_data, model, config, device, epoch
-                )
-
-            model.train()
-            running_loss = []
-
-            for dat in tqdm(train_dataloader, desc=f"Epoch {epoch} | batch"):
-                # zero gradients
-                optim.zero_grad()
-
-                # unpack data
-                smi_token, prot_token, pocket_mask, y, smiles, prot = dat
-                smi_token = {k: v.to(device) for k, v in smi_token.items()}
-                prot_token = {k: v.to(device) for k, v in prot_token.items()}
-                pocket_mask = pocket_mask.to(device)
-                y = y.to(device)
-
-                # pass through model
-                out = model(smi_token, prot_token, pocket_mask)
-                pred = out[0].squeeze()
-
-                # calculate loss and backprop
-                if "data/M2OR" in config["training"]["data_path"]:
-                    loss = loss_fn(pred, y, smiles, prot)
-                else:
-                    loss = loss_fn(pred, y)
-
-                loss.backward()
-                optim.step()
-
-                # bookeeping
-                running_loss.append(loss.item())
-
-            # evaluate
-            avg_val_loss = evaluate(
-                config, model, val_dataloader, device, loss_fn, epoch, writer, "val"
-            )
-            _ = evaluate(
-                config, model, test_dataloader, device, loss_fn, epoch, writer, "test"
-            )
-
-            # save model when the best validation loss happens
-            if avg_val_loss < best_loss:
-                save_model(model, config, split)
-                writer.add_scalar("Model/best_model", epoch, epoch)
-
-                # save final molecular representions
-                if split == first_split:
-                    print("Saving final molecular representation")
-                    save_molecular_rep(
-                        train_data, val_data, test_data, model, config, device, "final"
-                    )
-
-                # update best loss
-                best_loss = avg_val_loss
-
-            # report train loss
-            avg_loss = sum(running_loss) / len(running_loss)
-            writer.add_scalar("Loss/train", avg_loss, epoch)
-            wandb.log({"Loss/train": avg_loss}, step=epoch)
-            print(f"Epoch {epoch} | Avg Loss: {avg_loss:.4f}")
-
-        # write all pending events to log and close
-        writer.flush()
-        writer.close()
-        wandb.finish()
-
-        # cleanup
-        del model, train_data, val_data, test_data, train_dataloader, val_dataloader, _
+    # write all pending events to log and close
+    writer.flush()
+    writer.close()
+    wandb.finish()
 
 
 def main():
@@ -549,41 +386,11 @@ def main():
     # load config
     config = yaml.safe_load(open(args.config, "r"))
 
-    # split dir — each split is a subdirectory of data_path containing
-    # train/val/test CSVs. If there are no subdirectories, treat data_path
-    # itself as a single split (the CSVs live directly inside it).
-    data_path = config["training"]["data_path"].rstrip("/")
-    splits = sorted(
-        d for d in os.listdir(data_path) if os.path.isdir(os.path.join(data_path, d))
-    )
-    if not splits:
-        config["training"]["data_path"] = os.path.dirname(data_path)
-        splits = [os.path.basename(data_path)]
-
-    # distribute across gpus
-    n_gpus = torch.cuda.device_count()
-
-    if n_gpus != 0:
-        split_batches = [[] for _ in range(n_gpus)]
-        for i, split in enumerate(splits):
-            split_batches[i % n_gpus].append(split)
-
-        # call main training function
-        mp.spawn(train, args=(config, split_batches, splits), nprocs=n_gpus, join=True)
-
-    # cpu only
-    else:
-        split_batches = [splits]
-
-        # call main training function
-        train(0, config, split_batches, splits)
+    # call main training function
+    train(config)
 
     # save config
-    config_save_pth = os.path.join(
-        config["training"]["results_path"],
-        config["model"]["smi_model_card"].split("/")[-1],
-        "config.yaml",
-    )
+    config_save_pth = os.path.join(config["training"]["save_path"], "config.yaml")
     with open(config_save_pth, "w") as f:
         yaml.dump(config, f)
 
