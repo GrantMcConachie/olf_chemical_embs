@@ -141,10 +141,11 @@ class LORAX(nn.Module):
         # mean pool
         smi_mask = smi_mask.float()
         prot_mask = prot_mask.float()
-        if pocket_mask is None:
+        if not self.model_config["combine"]["use_binding_mask"] or pocket_mask is None:
             prot_full_mask = prot_mask
         else:
             prot_full_mask = prot_mask * pocket_mask
+
         smi_rep = (smi_rep * smi_mask.unsqueeze(-1)).sum(dim=1) / (
             smi_mask.unsqueeze(-1).sum(dim=1) + 1e-8
         )
