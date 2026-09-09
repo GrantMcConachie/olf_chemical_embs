@@ -1,0 +1,40 @@
+model:
+  smi_model_card: DeepChem/ChemBERTa-77M-MTR
+  prot_model_card: facebook/esm2_t33_650M_UR50D
+  combine:
+    mlp_hidden_dim: 512
+    full_smiles_sequence: true
+    smiles_hidden_dim: 256
+    num_heads: 8
+    comb_dropout: 0.1
+    no_cross_attn: false
+    no_prot_model_ft: true
+    lin_proj: false
+    use_binding_mask: false
+  lora_module:
+    inference_mode: false
+    r: 8
+    lora_alpha: 8
+    bias: none
+    use_rslora: false
+    modules_to_save:
+    - pooler.dense.bias
+    - pooler.dense.weight
+    target_modules:
+    - query
+    - key
+    - value
+    lora_dropout: 0.1
+training:
+  seed: 123
+  deterministic: true
+  data_path: data/CC/LORO/AgOr13
+  save_path: results/LORO_sweep/AgOr13/seed123
+train_lorax:
+  batch_size: 12
+  val_batch_size: 110
+  lr: 1.0e-05
+  train_epochs: 50
+train_GB:
+  max_evals: 500
+  use_lorax_embs: false

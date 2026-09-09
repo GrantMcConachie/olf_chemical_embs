@@ -9,6 +9,7 @@ batch_run.sh
 batch_run_GB.sh
 saved_models/
 logs/
+wandb/
 results/
 test_scripts/
 scripts/plot_attn_weights.py

@@ -176,8 +176,13 @@ def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset)
             preds = torch.concat(preds).cpu().numpy()
             r2 = r2_score(ground_truth, preds)
             ci = concordance_index(ground_truth, preds)
+            # Precision@k
+            k = 10
+            true_top = set(np.argsort(ground_truth)[::-1][:k])
+            pred_top = set(np.argsort(preds)[::-1][:k])
+            precision_k = len(true_top & pred_top) / k
             print(
-                f"Epoch {epoch} | Avg {dataset} Loss: {avg_loss:.4f} | {dataset} R2: {r2:.4f} | {dataset} CI: {ci:.4f}"
+                f"Epoch {epoch} | Avg {dataset} Loss: {avg_loss:.4f} | {dataset} R2: {r2:.4f} | {dataset} CI: {ci:.4f} | Precision@10: {precision_k:.1f}"
             )
 
             # write to tensorboard
@@ -204,6 +209,7 @@ def evaluate(config, model, dataloader, device, loss_fn, epoch, writer, dataset)
                     f"Loss/{dataset}": avg_loss,
                     f"{dataset}_metrics/{dataset}/R2": r2,
                     f"{dataset}_metrics/{dataset}/CI": ci,
+                    f"{dataset}_metrics/{dataset}/Precision@{k}": precision_k,
                     f"{dataset}_scatter/pred_vs_actual": wandb.Image(fig),
                 },
                 step=epoch,
