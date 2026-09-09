@@ -408,7 +408,18 @@ def train(gpu_id, config, split_batches):
             del state_dict['mlp.4.weight']
             del state_dict['mlp.4.bias']
 
-        model.load_state_dict(state_dict)
+        # The frozen protein model is not persisted in the checkpoint (see
+        # save_model in scripts/train_lorax.py). It is already restored above
+        # via AutoModel.from_pretrained, so tolerate its absence with
+        # strict=False. This is also backward compatible with older
+        # checkpoints that still contain the protein weights.
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        # only the frozen protein branch may be legitimately missing; anything
+        # else (a trainable head, an unexpected key) is a real problem
+        missing = [k for k in missing if not k.startswith('prot_lora_model.')]
+        assert not missing and not unexpected, (
+            f'Checkpoint key mismatch: missing={missing}, unexpected={unexpected}'
+        )
         model.eval()
 
         # generate model representation
