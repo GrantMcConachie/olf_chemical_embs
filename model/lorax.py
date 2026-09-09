@@ -27,6 +27,13 @@ class LORAX(nn.Module):
         self.model_config = model_config
         self.no_cross_attn = no_cross_attn
 
+        # Cache frozen protein embeddings. When the protein model is not
+        # fine-tuned its output is a deterministic function of the sequence,
+        # so we memoize last_hidden_state by sequence string and skip the
+        # (expensive) ESM2 forward on repeat proteins.
+        self.cache_prot = no_prot_model_ft
+        self.prot_cache = {}
+
         # create loara models
         lora_config_smi = self.create_lora_config(model_config)
         lora_config_prot = self.create_lora_config(model_config)
@@ -93,7 +100,7 @@ class LORAX(nn.Module):
 
         # pass foundation model tokens through lora models
         smi_rep_lora = self.smi_lora_model(**smi_token)
-        prot_rep_lora = self.prot_lora_model(**prot_token).last_hidden_state
+        prot_rep_lora = self._protein_embeddings(prot_token)
 
         # projecting smiles representation to consistent dimension
         if self.model_config['combine']['full_smiles_sequence']:
@@ -147,6 +154,36 @@ class LORAX(nn.Module):
             prot_mask
         )
 
+    def _protein_embeddings(self, prot_token):
+        """
+        Returns the protein model's last_hidden_state for a batch.
+
+        When the protein model is frozen (`no_prot_model_ft`) its output is a
+        deterministic function of the input tokens, so we memoize it by the
+        token ids and only run the (expensive) ESM2 forward on proteins we
+        have not seen yet. When the protein model is fine-tuned its output
+        changes every step, so we always run it live.
+        """
+        if not self.cache_prot:
+            return self.prot_lora_model(**prot_token).last_hidden_state
+
+        # raw token bytes form a hashable, sequence-unique cache key per row
+        keys = [ids.tobytes() for ids in prot_token['input_ids'].cpu().numpy()]
+        miss = [i for i, k in enumerate(keys) if k not in self.prot_cache]
+
+        if miss:
+            sub = {k: v[miss] for k, v in prot_token.items()}
+            was_training = self.prot_lora_model.training
+            self.prot_lora_model.eval()  # canonical frozen features (no dropout)
+            with torch.no_grad():
+                emb = self.prot_lora_model(**sub).last_hidden_state
+            if was_training:
+                self.prot_lora_model.train()
+            for j, i in enumerate(miss):
+                self.prot_cache[keys[i]] = emb[j]
+
+        return torch.stack([self.prot_cache[k] for k in keys])
+
     def create_lora_config(self, model_config):
 
         lora_config = LoraConfig(
@@ -171,7 +208,7 @@ class LORAX(nn.Module):
 
         # pass foundation model tokens through lora models
         smi_rep_lora = self.smi_lora_model(**smi_token)
-        prot_rep_lora = self.prot_lora_model(**prot_token).last_hidden_state
+        prot_rep_lora = self._protein_embeddings(prot_token)
 
         # projecting smiles representation to consistent dimension
         if self.model_config['combine']['full_smiles_sequence']:
