@@ -3,7 +3,6 @@ Dataset utilities for the model.
 """
 
 import pandas as pd
-
 import torch
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
@@ -25,10 +24,10 @@ class ProteinSmilesDataset(Dataset):
         self.protein_ids, unique_proteins = pd.factorize(self.df["Protein sequence"])
 
         # length of tokens
-        self.smi_max_len = smi_model.config.max_position_embeddings - num_special_tokens
-        self.prot_max_len = (
-            prot_model.config.max_position_embeddings - num_special_tokens
-        )
+        self.smi_max_len = smi_model.config.max_position_embeddings-num_special_tokens
+        self.prot_max_len = prot_model.config.max_position_embeddings-num_special_tokens
+
+        # Truncate max length if the longest sequence is shorter
         self.smi_max_len = min(
             self.smi_max_len, max(len(s) for s in unique_smiles) + num_special_tokens
         )
@@ -42,14 +41,14 @@ class ProteinSmilesDataset(Dataset):
 
         self.tokenized_smiles = self.smi_tokenizer(
             list(unique_smiles),
-            padding="max_length",  # NOTE: may need to specify this for particular models
+            padding='max_length',  # NOTE: may need to specify this for particular models
             max_length=self.smi_max_len,
             truncation=True,
             return_tensors='pt'
         )
         self.tokenized_proteins = self.prot_tokenizer(
             list(unique_proteins),
-            padding="max_length",
+            padding='max_length',
             max_length=self.prot_max_len,
             truncation=True,
             return_tensors='pt'
@@ -74,8 +73,8 @@ class ProteinSmilesDataset(Dataset):
             smi_token,
             prot_token,
             torch.tensor(self.df["output"][index], dtype=torch.float32),
-            self.df["SMILES"][index],  # smiles
-            self.df["Protein sequence"][index],
+            self.df['SMILES'][index],  # smiles
+            self.df['Protein sequence'][index],
         )
 
     def get_unique_smiles_rep(self):
